@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 class BeyondAPITester:
-    def __init__(self, base_url="https://beam-control-3.preview.emergentagent.com"):
+    def __init__(self, base_url="https://pangolin-ai-builder.preview.emergentagent.com"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.tests_run = 0
