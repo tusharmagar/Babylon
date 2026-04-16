@@ -3,9 +3,13 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
 import logging
+import asyncio
+import socket
 from pathlib import Path
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
+import uuid
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 from ai_agent import BeyondAIAgent
@@ -22,7 +26,125 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+# ===== TCP Connection Manager for PangoScript (Cues) =====
+class BeyondConnectionManager:
+    """Manages TCP connection to BEYOND's PangoScript interface (port 16063).
+    Used for controlling existing cues — StartCue, StopCue, StopAllNow, blackout commands.
+    """
+    def __init__(self):
+        self.socket: Optional[socket.socket] = None
+        self.host: Optional[str] = None
+        self.port: Optional[int] = None
+        self.connected: bool = False
+        self.lock = asyncio.Lock()
+        self.command_logs: List[dict] = []
+        self.max_logs = 100
+        self.echo_mode = 1
+
+    def add_log(self, log_type: str, message: str, response: str = None):
+        log_entry = {
+            "id": str(uuid.uuid4()),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "type": log_type,
+            "message": message,
+            "response": response
+        }
+        self.command_logs.append(log_entry)
+        if len(self.command_logs) > self.max_logs:
+            self.command_logs.pop(0)
+        logger.info(f"[{log_type}] {message} -> {response}")
+        return log_entry
+
+    async def connect(self, host: str, port: int, timeout: float = 5.0) -> bool:
+        async with self.lock:
+            try:
+                if self.socket:
+                    try:
+                        self.socket.close()
+                    except Exception:
+                        pass
+                    self.socket = None
+                    self.connected = False
+
+                self.host = host
+                self.port = port
+                self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.socket.settimeout(timeout)
+                self.socket.connect((host, port))
+                self.connected = True
+                self.add_log("CONNECTION", f"Connected to {host}:{port}")
+                await self._send_raw_internal(f"SetEchoMode {self.echo_mode}")
+                return True
+
+            except socket.timeout:
+                self.add_log("ERROR", f"Connection timeout to {host}:{port}")
+                self.connected = False
+                return False
+            except ConnectionRefusedError:
+                self.add_log("ERROR", f"Connection refused by {host}:{port}")
+                self.connected = False
+                return False
+            except Exception as e:
+                self.add_log("ERROR", f"Connection error: {str(e)}")
+                self.connected = False
+                return False
+
+    async def disconnect(self):
+        async with self.lock:
+            if self.socket:
+                try:
+                    self.socket.close()
+                except Exception:
+                    pass
+                self.socket = None
+            self.connected = False
+            self.add_log("CONNECTION", "Disconnected")
+
+    async def _send_raw_internal(self, command: str) -> Optional[str]:
+        if not self.socket or not self.connected:
+            return None
+        try:
+            full_command = f"{command}\r\n"
+            self.socket.sendall(full_command.encode('ascii'))
+            self.socket.settimeout(2.0)
+            try:
+                response = self.socket.recv(1024).decode('ascii').strip()
+            except socket.timeout:
+                response = "(no response)"
+            return response
+        except Exception as e:
+            self.connected = False
+            raise e
+
+    async def send_command(self, command: str) -> dict:
+        async with self.lock:
+            if not self.socket or not self.connected:
+                log = self.add_log("ERROR", command, "Not connected to BEYOND")
+                return {"success": False, "error": "Not connected", "log": log}
+            try:
+                response = await self._send_raw_internal(command)
+                log = self.add_log("COMMAND", command, response)
+                return {"success": True, "response": response, "log": log}
+            except Exception as e:
+                self.connected = False
+                log = self.add_log("ERROR", command, str(e))
+                return {"success": False, "error": str(e), "log": log}
+
+    def get_status(self) -> dict:
+        return {
+            "connected": self.connected,
+            "host": self.host,
+            "port": self.port,
+            "echo_mode": self.echo_mode
+        }
+
+    def get_logs(self, limit: int = 50) -> List[dict]:
+        return self.command_logs[-limit:]
+
+
 # ===== Global Instances =====
+beyond_manager = BeyondConnectionManager()
 sdk_manager = BeyondSDKManager()
 
 ai_agent = None
@@ -34,6 +156,24 @@ except Exception as e:
 
 
 # ===== Pydantic Models =====
+class ConnectionConfigCreate(BaseModel):
+    host: str
+    port: int
+    timeout: float = 5.0
+
+class CommandRequest(BaseModel):
+    command: str
+
+class CueRequest(BaseModel):
+    page: int = 1
+    cue: int
+
+class CommandResponse(BaseModel):
+    success: bool
+    response: Optional[str] = None
+    error: Optional[str] = None
+    log: Optional[dict] = None
+
 class ChatMessageRequest(BaseModel):
     message: str
     session_id: Optional[str] = None
@@ -52,6 +192,7 @@ async def lifespan(app: FastAPI):
     logger.info("Server started — DB initialized, SDK manager running")
     yield
     # Shutdown
+    await beyond_manager.disconnect()
     sdk_manager.shutdown()
     logger.info("Server shut down cleanly")
 
@@ -61,12 +202,127 @@ app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 
-# ===== SDK / Laser Endpoints =====
-
 @api_router.get("/")
 async def root():
-    return {"message": "BEYOND Control API — SDK Mode"}
+    return {"message": "BEYOND Control API — SDK + PangoScript"}
 
+
+# ===== PangoScript TCP Endpoints (Cues Page) =====
+
+@api_router.get("/config")
+async def get_config():
+    """Get the saved PangoScript connection configuration."""
+    config = db.get_pangoscript_config()
+    if config:
+        return config
+    return {"host": "", "port": 16063, "timeout": 5.0}
+
+
+@api_router.post("/config")
+async def save_config(config: ConnectionConfigCreate):
+    """Save PangoScript connection configuration."""
+    saved = db.save_pangoscript_config(config.host, config.port, config.timeout)
+    return {"success": True, "config": saved}
+
+
+@api_router.post("/connect")
+async def connect_beyond(config: ConnectionConfigCreate):
+    """Connect to BEYOND via PangoScript TCP (through ngrok endpoint)."""
+    db.save_pangoscript_config(config.host, config.port, config.timeout)
+    success = await beyond_manager.connect(config.host, config.port, config.timeout)
+    if success:
+        return {"success": True, "message": f"Connected to {config.host}:{config.port}"}
+    else:
+        raise HTTPException(status_code=503, detail=f"Failed to connect to {config.host}:{config.port}")
+
+
+@api_router.post("/disconnect")
+async def disconnect_beyond():
+    """Disconnect from BEYOND PangoScript."""
+    await beyond_manager.disconnect()
+    return {"success": True, "message": "Disconnected"}
+
+
+@api_router.get("/status")
+async def get_status():
+    """Get PangoScript connection status."""
+    return beyond_manager.get_status()
+
+
+@api_router.post("/test-connection")
+async def test_connection():
+    """Test the PangoScript connection."""
+    if not beyond_manager.connected:
+        return {"success": False, "error": "Not connected"}
+    result = await beyond_manager.send_command("Hello")
+    return result
+
+
+@api_router.post("/command", response_model=CommandResponse)
+async def send_command(request: CommandRequest):
+    """Send a raw PangoScript command."""
+    result = await beyond_manager.send_command(request.command)
+    return CommandResponse(**result)
+
+
+@api_router.post("/cue/start", response_model=CommandResponse)
+async def start_cue(request: CueRequest):
+    """Start a specific cue (1-indexed)."""
+    command = f"StartCue {request.page},{request.cue}"
+    result = await beyond_manager.send_command(command)
+    return CommandResponse(**result)
+
+
+@api_router.post("/cue/stop", response_model=CommandResponse)
+async def stop_cue(request: CueRequest):
+    """Stop a specific cue."""
+    command = f"StopCue {request.page},{request.cue}"
+    result = await beyond_manager.send_command(command)
+    return CommandResponse(**result)
+
+
+@api_router.post("/stop-all", response_model=CommandResponse)
+async def stop_all():
+    """Stop all playback immediately."""
+    result = await beyond_manager.send_command("StopAllNow")
+    return CommandResponse(**result)
+
+
+@api_router.post("/blackout/on", response_model=CommandResponse)
+async def blackout_on():
+    """Enable blackout (disable laser output)."""
+    result = await beyond_manager.send_command("DisableLaserOutput")
+    return CommandResponse(**result)
+
+
+@api_router.post("/blackout/off", response_model=CommandResponse)
+async def blackout_off():
+    """Disable blackout (enable laser output)."""
+    result = await beyond_manager.send_command("EnableLaserOutput")
+    return CommandResponse(**result)
+
+
+@api_router.post("/blackout/toggle", response_model=CommandResponse)
+async def blackout_toggle():
+    """Toggle blackout state."""
+    result = await beyond_manager.send_command("ToggleBlackout")
+    return CommandResponse(**result)
+
+
+@api_router.get("/logs")
+async def get_logs(limit: int = 50):
+    """Get recent PangoScript command logs."""
+    return {"logs": beyond_manager.get_logs(limit)}
+
+
+@api_router.delete("/logs")
+async def clear_logs():
+    """Clear command logs."""
+    beyond_manager.command_logs = []
+    return {"success": True, "message": "Logs cleared"}
+
+
+# ===== SDK / Laser Endpoints (AI Builder) =====
 
 @api_router.get("/laser/status")
 async def laser_status():

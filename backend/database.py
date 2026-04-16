@@ -52,9 +52,46 @@ def init_db():
 
             CREATE INDEX IF NOT EXISTS idx_messages_session
                 ON chat_messages(session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS pangoscript_config (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                host TEXT NOT NULL DEFAULT '',
+                port INTEGER NOT NULL DEFAULT 16063,
+                timeout REAL NOT NULL DEFAULT 5.0,
+                updated_at TEXT NOT NULL
+            );
         """)
         conn.commit()
         logger.info(f"Database initialized at {DB_PATH}")
+    finally:
+        conn.close()
+
+
+# ===== PangoScript Config =====
+
+def get_pangoscript_config():
+    """Get saved PangoScript connection config."""
+    conn = get_db()
+    try:
+        row = conn.execute("SELECT * FROM pangoscript_config WHERE id=1").fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
+def save_pangoscript_config(host, port, timeout=5.0):
+    """Save PangoScript connection config (upsert)."""
+    conn = get_db()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute(
+            """INSERT INTO pangoscript_config (id, host, port, timeout, updated_at)
+               VALUES (1, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET host=?, port=?, timeout=?, updated_at=?""",
+            (host, port, timeout, now, host, port, timeout, now)
+        )
+        conn.commit()
+        return {"host": host, "port": port, "timeout": timeout, "updated_at": now}
     finally:
         conn.close()
 
