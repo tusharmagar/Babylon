@@ -14,6 +14,8 @@ import {
   Loader2,
   Sparkles,
   ChevronRight,
+  Zap,
+  ZapOff,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -23,19 +25,30 @@ import LaserPreview from "@/components/LaserPreview";
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
-// Code block with copy functionality
-const CodeBlock = ({ code, onDownload }) => {
+// Code block with copy + download
+const CodeBlock = ({ code, patternName }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(code);
       setCopied(true);
-      toast.success("Code copied to clipboard");
+      toast.success("Code copied");
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error("Failed to copy");
     }
+  };
+
+  const handleDownload = () => {
+    const blob = new Blob([code], { type: "text/x-python" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `beyond_${(patternName || "pattern").toLowerCase().replace(/\s+/g, "_")}.py`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("Script downloaded");
   };
 
   return (
@@ -43,51 +56,69 @@ const CodeBlock = ({ code, onDownload }) => {
       <div className="flex items-center justify-between px-3 py-2 bg-white/5 border-b border-white/10">
         <div className="flex items-center gap-2">
           <Code className="w-3.5 h-3.5 text-green-500" />
-          <span className="text-xs text-zinc-400 font-mono">beyond_pattern.py</span>
+          <span className="text-xs text-zinc-400 font-mono">reference_code.py</span>
         </div>
         <div className="flex gap-1">
-          <button
-            onClick={handleCopy}
-            className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title="Copy code"
-          >
-            {copied ? (
-              <Check className="w-3.5 h-3.5 text-green-500" />
-            ) : (
-              <Copy className="w-3.5 h-3.5 text-zinc-400" />
-            )}
+          <button onClick={handleCopy} className="p-1.5 rounded hover:bg-white/10 transition-colors" title="Copy">
+            {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5 text-zinc-400" />}
           </button>
-          <button
-            onClick={onDownload}
-            className="p-1.5 rounded hover:bg-white/10 transition-colors"
-            title="Download script"
-          >
+          <button onClick={handleDownload} className="p-1.5 rounded hover:bg-white/10 transition-colors" title="Download">
             <Download className="w-3.5 h-3.5 text-zinc-400" />
           </button>
         </div>
       </div>
-      <pre className="p-3 overflow-x-auto text-xs font-mono text-zinc-300 max-h-[300px] overflow-y-auto leading-relaxed">
+      <pre className="p-3 overflow-x-auto text-xs font-mono text-zinc-300 max-h-[250px] overflow-y-auto leading-relaxed">
         <code>{code}</code>
       </pre>
     </div>
   );
 };
 
+// Send to Laser button
+const SendToLaserButton = ({ pointData, patternName, disabled }) => {
+  const [sending, setSending] = useState(false);
+
+  const handleSend = async () => {
+    if (!pointData || pointData.length === 0) return;
+    setSending(true);
+    try {
+      const res = await axios.post(`${API}/laser/send`, {
+        point_data: pointData,
+        pattern_name: patternName || "AI Pattern",
+      });
+      if (res.data.success) {
+        toast.success(
+          res.data.simulation_mode
+            ? `Pattern loaded (simulation) — ${res.data.point_count} points`
+            : `Streaming to laser — ${res.data.point_count} points`
+        );
+      }
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to send to laser");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleSend}
+      disabled={disabled || !pointData || pointData.length === 0 || sending}
+      className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-30 disabled:cursor-not-allowed text-white font-semibold text-sm transition-all active:scale-[0.98]"
+    >
+      {sending ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : (
+        <Zap className="w-4 h-4" />
+      )}
+      {sending ? "Sending..." : "Send to Laser"}
+    </button>
+  );
+};
+
 // Chat message component
 const ChatMessageItem = ({ message }) => {
   const isUser = message.role === "user";
-
-  const handleDownload = () => {
-    if (!message.python_code) return;
-    const blob = new Blob([message.python_code], { type: "text/x-python" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `beyond_${(message.pattern_name || "pattern").toLowerCase().replace(/\s+/g, "_")}.py`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast.success("Script downloaded");
-  };
 
   if (isUser) {
     return (
@@ -105,6 +136,9 @@ const ChatMessageItem = ({ message }) => {
   }
 
   // Assistant message
+  const hasPoints = message.point_data && message.point_data.length > 0;
+  const hasCode = message.python_code && message.python_code.length > 20;
+
   return (
     <div className="flex gap-3">
       <div className="w-8 h-8 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
@@ -118,8 +152,8 @@ const ChatMessageItem = ({ message }) => {
           </p>
         </div>
 
-        {/* Laser Preview */}
-        {message.point_data && message.point_data.length > 0 && (
+        {/* Laser Preview + Send to Laser */}
+        {hasPoints && (
           <div className="rounded-lg border border-white/10 overflow-hidden">
             <div className="flex items-center gap-2 px-3 py-2 bg-white/5 border-b border-white/10">
               <Sparkles className="w-3.5 h-3.5 text-green-500" />
@@ -133,26 +167,41 @@ const ChatMessageItem = ({ message }) => {
             <div className="h-[280px] bg-[#050505]">
               <LaserPreview pointData={message.point_data} className="w-full h-full" />
             </div>
+            <div className="p-2 bg-white/5 border-t border-white/10">
+              <SendToLaserButton
+                pointData={message.point_data}
+                patternName={message.pattern_name}
+              />
+            </div>
           </div>
         )}
 
-        {/* Python code */}
-        {message.python_code && message.python_code.length > 20 && (
-          <CodeBlock code={message.python_code} onDownload={handleDownload} />
+        {/* Python code (reference) */}
+        {hasCode && (
+          <details className="group">
+            <summary className="flex items-center gap-2 cursor-pointer text-xs text-zinc-500 hover:text-zinc-300 transition-colors py-1">
+              <Code className="w-3.5 h-3.5" />
+              <span>View reference SDK code</span>
+              <ChevronRight className="w-3 h-3 transition-transform group-open:rotate-90" />
+            </summary>
+            <div className="mt-2">
+              <CodeBlock code={message.python_code} patternName={message.pattern_name} />
+            </div>
+          </details>
         )}
       </div>
     </div>
   );
 };
 
-// Suggestion chips for new chat
+// Suggestion chips
 const SUGGESTIONS = [
   "Draw a circle",
-  "Draw a star with 5 points",
+  "Draw a 5-point star",
   "Draw the word LASER",
   "Draw a spinning triangle",
   "Draw a heart shape",
-  "Draw a spiral pattern",
+  "Draw a spiral",
 ];
 
 const SuggestionChips = ({ onSelect }) => (
@@ -162,7 +211,7 @@ const SuggestionChips = ({ onSelect }) => (
       <h3 className="text-lg font-semibold text-white">BEYOND AI Builder</h3>
     </div>
     <p className="text-sm text-zinc-500 text-center max-w-md">
-      Describe a laser pattern and I'll generate the BEYOND SDK code to render it directly on your laser.
+      Describe a laser pattern and I'll generate it and stream it directly to BEYOND via the SDK.
     </p>
     <div className="flex flex-wrap gap-2 justify-center mt-2 max-w-lg">
       {SUGGESTIONS.map((s) => (
@@ -178,8 +227,8 @@ const SuggestionChips = ({ onSelect }) => (
   </div>
 );
 
-// Main AI Builder component
-const AIBuilder = () => {
+// Main AI Builder
+const AIBuilder = ({ sdkStatus }) => {
   const [sessions, setSessions] = useState([]);
   const [currentSessionId, setCurrentSessionId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -189,12 +238,8 @@ const AIBuilder = () => {
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
 
-  // Load sessions on mount
-  useEffect(() => {
-    loadSessions();
-  }, []);
+  useEffect(() => { loadSessions(); }, []);
 
-  // Load messages when session changes
   useEffect(() => {
     if (currentSessionId) {
       loadMessages(currentSessionId);
@@ -203,7 +248,6 @@ const AIBuilder = () => {
     }
   }, [currentSessionId]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
@@ -242,7 +286,7 @@ const AIBuilder = () => {
         setMessages([]);
       }
       toast.info("Chat deleted");
-    } catch (e) {
+    } catch {
       toast.error("Failed to delete chat");
     }
   };
@@ -254,7 +298,6 @@ const AIBuilder = () => {
     setInput("");
     setLoading(true);
 
-    // Optimistically add user message
     const tempUserMsg = {
       id: `temp-${Date.now()}`,
       role: "user",
@@ -271,12 +314,10 @@ const AIBuilder = () => {
 
       const data = res.data;
 
-      // Set session if this is a new one
       if (!currentSessionId) {
         setCurrentSessionId(data.session_id);
       }
 
-      // Add AI response
       const aiMsg = {
         id: data.message_id,
         role: "assistant",
@@ -288,15 +329,21 @@ const AIBuilder = () => {
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, aiMsg]);
-
-      // Refresh sessions list
       loadSessions();
     } catch (e) {
       toast.error(e.response?.data?.detail || "Failed to send message");
-      // Remove optimistic message on error
       setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleBlackout = async () => {
+    try {
+      await axios.post(`${API}/laser/blackout`);
+      toast.success("Blackout — laser cleared");
+    } catch {
+      toast.error("Failed to blackout");
     }
   };
 
@@ -311,9 +358,7 @@ const AIBuilder = () => {
     <div className="flex h-[calc(100vh-120px)] gap-0 overflow-hidden rounded-lg border border-white/10">
       {/* Sessions Sidebar */}
       <div
-        className={`${
-          sidebarOpen ? "w-64" : "w-0"
-        } transition-all duration-200 bg-[#0A0A0A] border-r border-white/10 flex flex-col overflow-hidden flex-shrink-0`}
+        className={`${sidebarOpen ? "w-64" : "w-0"} transition-all duration-200 bg-[#0A0A0A] border-r border-white/10 flex flex-col overflow-hidden flex-shrink-0`}
       >
         <div className="p-3 border-b border-white/10">
           <Button
@@ -348,12 +393,20 @@ const AIBuilder = () => {
               </button>
             ))}
             {sessions.length === 0 && (
-              <p className="text-xs text-zinc-600 text-center py-4">
-                No chats yet
-              </p>
+              <p className="text-xs text-zinc-600 text-center py-4">No chats yet</p>
             )}
           </div>
         </ScrollArea>
+        {/* Quick blackout button in sidebar */}
+        <div className="p-3 border-t border-white/10">
+          <button
+            onClick={handleBlackout}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-red-600/20 border border-red-500/30 text-red-400 hover:bg-red-600/30 text-xs font-semibold transition-all"
+          >
+            <ZapOff className="w-3.5 h-3.5" />
+            BLACKOUT
+          </button>
+        </div>
       </div>
 
       {/* Toggle sidebar */}
@@ -362,9 +415,7 @@ const AIBuilder = () => {
         className="w-5 flex items-center justify-center bg-[#0D0D0D] hover:bg-white/5 border-r border-white/10 transition-colors flex-shrink-0"
       >
         <ChevronRight
-          className={`w-3 h-3 text-zinc-600 transition-transform ${
-            sidebarOpen ? "rotate-180" : ""
-          }`}
+          className={`w-3 h-3 text-zinc-600 transition-transform ${sidebarOpen ? "rotate-180" : ""}`}
         />
       </button>
 
@@ -376,12 +427,9 @@ const AIBuilder = () => {
             {messages.length === 0 ? (
               <SuggestionChips onSelect={(text) => sendMessage(text)} />
             ) : (
-              messages.map((msg) => (
-                <ChatMessageItem key={msg.id} message={msg} />
-              ))
+              messages.map((msg) => <ChatMessageItem key={msg.id} message={msg} />)
             )}
 
-            {/* Loading indicator */}
             {loading && (
               <div className="flex gap-3">
                 <div className="w-8 h-8 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
@@ -390,9 +438,7 @@ const AIBuilder = () => {
                 <div className="bg-[#1A1A1A] border border-white/10 rounded-2xl rounded-tl-sm px-4 py-3">
                   <div className="flex items-center gap-2">
                     <Loader2 className="w-4 h-4 text-green-500 animate-spin" />
-                    <span className="text-sm text-zinc-400">
-                      Generating laser pattern...
-                    </span>
+                    <span className="text-sm text-zinc-400">Generating laser pattern...</span>
                   </div>
                 </div>
               </div>
@@ -402,7 +448,7 @@ const AIBuilder = () => {
           </div>
         </ScrollArea>
 
-        {/* Input area */}
+        {/* Input */}
         <div className="border-t border-white/10 p-4 bg-[#0D0D0D]">
           <div className="max-w-3xl mx-auto">
             <div className="flex gap-2 items-end">
@@ -433,7 +479,7 @@ const AIBuilder = () => {
               </Button>
             </div>
             <p className="text-[10px] text-zinc-600 mt-2 text-center">
-              AI generates BEYOND SDK code. Run the Python script locally with BEYOND running to see output on your laser.
+              AI generates patterns → Click "Send to Laser" to stream directly to BEYOND via SDK
             </p>
           </div>
         </div>

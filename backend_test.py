@@ -1,54 +1,44 @@
 #!/usr/bin/env python3
 """
-Backend API Testing for Pangolin BEYOND Control App
-Focus on NEW chat/AI endpoints as requested in review
+Comprehensive backend test for Pangolin BEYOND laser control system.
+Tests all laser control and chat endpoints as specified in the review request.
 """
 
 import requests
-import sys
 import json
 import time
-from datetime import datetime
-from typing import Dict, Any, List, Optional
+import sys
+import logging
+from typing import Dict, Any, Optional
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+
+# Backend URL from frontend .env
+BACKEND_URL = "https://pangolin-ai-builder.preview.emergentagent.com/api"
 
 class BeyondAPITester:
-    def __init__(self, base_url="https://pangolin-ai-builder.preview.emergentagent.com"):
+    def __init__(self, base_url: str):
         self.base_url = base_url
-        self.api_url = f"{base_url}/api"
-        self.tests_run = 0
-        self.tests_passed = 0
-        self.test_results = []
         self.session = requests.Session()
-        self.session.headers.update({'Content-Type': 'application/json'})
-        self.test_session_id = None  # Store session ID for testing
-
-    def log_test(self, name: str, success: bool, details: str = "", response_data: Any = None):
-        """Log test result"""
-        self.tests_run += 1
-        if success:
-            self.tests_passed += 1
+        self.session.timeout = 120  # 120 second timeout for LLM calls
+        self.test_results = []
         
-        result = {
-            "test_name": name,
+    def log_test(self, test_name: str, success: bool, details: str = "", response_data: Any = None):
+        """Log test result"""
+        status = "✅ PASS" if success else "❌ FAIL"
+        logger.info(f"{status} {test_name}: {details}")
+        self.test_results.append({
+            "test": test_name,
             "success": success,
             "details": details,
-            "response_data": response_data,
-            "timestamp": datetime.now().isoformat()
-        }
-        self.test_results.append(result)
+            "response_data": response_data
+        })
         
-        status = "✅ PASS" if success else "❌ FAIL"
-        print(f"{status} - {name}")
-        if details:
-            print(f"    {details}")
-        if not success and response_data:
-            print(f"    Response: {response_data}")
-
-    def run_test(self, name: str, method: str, endpoint: str, expected_status: int, 
-                 data: Dict = None, expected_fields: List[str] = None, timeout: int = 30) -> Optional[Dict]:
-        """Run a single API test and return response data if successful"""
-        url = f"{self.api_url}/{endpoint}"
-        
+    def make_request(self, method: str, endpoint: str, data: Dict = None, timeout: int = 30) -> tuple[bool, Dict]:
+        """Make HTTP request and return (success, response_data)"""
+        url = f"{self.base_url}{endpoint}"
         try:
             if method.upper() == "GET":
                 response = self.session.get(url, timeout=timeout)
@@ -57,299 +47,383 @@ class BeyondAPITester:
             elif method.upper() == "DELETE":
                 response = self.session.delete(url, timeout=timeout)
             else:
-                self.log_test(name, False, f"Unsupported method: {method}")
-                return None
-            
-            # Check status code
-            if response.status_code != expected_status:
-                try:
-                    error_data = response.json()
-                except:
-                    error_data = response.text
-                self.log_test(name, False, 
-                             f"Expected status {expected_status}, got {response.status_code}",
-                             error_data)
-                return None
-            
-            # Parse JSON response
-            try:
-                response_data = response.json()
-            except json.JSONDecodeError:
-                self.log_test(name, False, "Invalid JSON response", response.text)
-                return None
-            
-            # Check expected fields
-            if expected_fields:
-                missing_fields = [field for field in expected_fields if field not in response_data]
-                if missing_fields:
-                    self.log_test(name, False, f"Missing fields: {missing_fields}", response_data)
-                    return None
-            
-            self.log_test(name, True, f"Status: {response.status_code}")
-            return response_data
+                return False, {"error": f"Unsupported method: {method}"}
+                
+            response.raise_for_status()
+            return True, response.json()
             
         except requests.exceptions.Timeout:
-            self.log_test(name, False, f"Request timeout after {timeout}s")
-            return None
+            return False, {"error": "Request timeout"}
         except requests.exceptions.RequestException as e:
-            self.log_test(name, False, f"Request error: {str(e)}")
-            return None
+            return False, {"error": str(e), "status_code": getattr(e.response, 'status_code', None)}
+        except json.JSONDecodeError:
+            return False, {"error": "Invalid JSON response", "text": response.text[:500]}
         except Exception as e:
-            self.log_test(name, False, f"Unexpected error: {str(e)}")
+            return False, {"error": f"Unexpected error: {str(e)}"}
+
+    def test_laser_status_initial(self):
+        """Test 1: GET /api/laser/status - Initial status check"""
+        success, data = self.make_request("GET", "/laser/status")
+        
+        if not success:
+            self.log_test("Laser Status (Initial)", False, f"Request failed: {data.get('error', 'Unknown error')}")
             return None
-
-    def test_existing_endpoints(self):
-        """Test existing endpoints to ensure they still work"""
-        print("\n=== Testing Existing Endpoints ===")
-        
-        # Test status endpoint
-        self.run_test("GET /api/status", "GET", "status", 200, 
-                     expected_fields=["connected", "host", "port", "echo_mode"])
-        
-        # Test config endpoint
-        self.run_test("GET /api/config", "GET", "config", 200)
-        
-        # Test logs endpoint
-        self.run_test("GET /api/logs", "GET", "logs", 200, 
-                     expected_fields=["logs"])
-
-    def test_chat_new(self):
-        """Test POST /api/chat/new - Create a new chat session"""
-        print("\n=== Testing Chat Session Creation ===")
-        
-        response_data = self.run_test(
-            "POST /api/chat/new", 
-            "POST", 
-            "chat/new", 
-            200,
-            expected_fields=["session_id", "title", "created_at"]
-        )
-        
-        if response_data:
-            self.test_session_id = response_data["session_id"]
-            print(f"    Created session: {self.test_session_id[:8]}...")
-            print(f"    Title: '{response_data['title']}'")
-
-    def test_chat_sessions_list(self):
-        """Test GET /api/chat/sessions - List all chat sessions"""
-        print("\n=== Testing Chat Sessions List ===")
-        
-        response_data = self.run_test(
-            "GET /api/chat/sessions",
-            "GET",
-            "chat/sessions",
-            200,
-            expected_fields=["sessions"]
-        )
-        
-        if response_data:
-            sessions = response_data["sessions"]
-            print(f"    Found {len(sessions)} sessions")
             
-            # Verify our test session is in the list if we created one
-            if self.test_session_id:
-                session_ids = [s.get("id") for s in sessions]
-                if self.test_session_id in session_ids:
-                    print(f"    ✓ Test session {self.test_session_id[:8]}... found in list")
-                else:
-                    print(f"    ⚠ Test session {self.test_session_id[:8]}... not found in list")
-
-    def test_chat_send(self):
-        """Test POST /api/chat/send - Send a message to AI agent (CRITICAL TEST - 120s timeout)"""
-        print("\n=== Testing Chat Send (AI Agent) ===")
-        print("⏳ This test calls the LLM and may take 30-60 seconds...")
+        # Check required fields
+        required_fields = ["initialized", "simulation_mode", "streaming", "point_count", 
+                          "current_pattern", "frames_sent", "fps", "scan_rate", "last_error"]
+        missing_fields = [field for field in required_fields if field not in data]
         
-        # Test data with a simple laser pattern request
-        test_message = {
-            "message": "Draw a simple circle pattern",
-            "session_id": self.test_session_id  # Use existing session or None for new
+        if missing_fields:
+            self.log_test("Laser Status (Initial)", False, f"Missing fields: {missing_fields}", data)
+            return None
+            
+        self.log_test("Laser Status (Initial)", True, 
+                     f"initialized={data['initialized']}, simulation_mode={data['simulation_mode']}, "
+                     f"streaming={data['streaming']}, point_count={data['point_count']}", data)
+        return data
+
+    def test_laser_send(self):
+        """Test 2: POST /api/laser/send - Send point data"""
+        test_data = {
+            "point_data": [
+                {"x": 0, "y": 0, "color": "0x00FFFFFF", "rep_count": 0},
+                {"x": 10000, "y": 10000, "color": "0x000000FF", "rep_count": 2}
+            ],
+            "pattern_name": "Test"
         }
         
-        response_data = self.run_test(
-            "POST /api/chat/send",
-            "POST",
-            "chat/send",
-            200,
-            data=test_message,
-            expected_fields=["session_id", "message", "pattern_name", "point_data", "python_code", "message_id"],
-            timeout=120  # Extended timeout for LLM call
-        )
+        success, data = self.make_request("POST", "/laser/send", test_data)
         
-        if response_data:
-            # Update test session ID if it was created
-            if not self.test_session_id:
-                self.test_session_id = response_data["session_id"]
+        if not success:
+            self.log_test("Laser Send", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
             
-            # Validate point_data structure
-            point_data = response_data.get("point_data", [])
-            if isinstance(point_data, list) and len(point_data) > 0:
-                # Check first point has required fields
-                first_point = point_data[0]
-                point_fields = ["x", "y", "color", "rep_count"]
-                missing_point_fields = [field for field in point_fields if field not in first_point]
-                
-                if missing_point_fields:
-                    print(f"    ❌ Point data missing fields: {missing_point_fields}")
-                else:
-                    print(f"    ✓ AI response generated successfully")
-                    print(f"    Pattern: '{response_data['pattern_name']}'")
-                    print(f"    Points: {len(point_data)}")
-                    print(f"    Code length: {len(response_data.get('python_code', ''))}")
-                    print(f"    Sample point: x={first_point['x']}, y={first_point['y']}, color={first_point['color']}")
-            else:
-                print(f"    ❌ Point data is empty or invalid")
-
-    def test_chat_messages(self):
-        """Test GET /api/chat/{session_id}/messages - Get messages for a session"""
-        print("\n=== Testing Chat Messages Retrieval ===")
+        # Check required response fields
+        required_fields = ["success", "point_count", "simulation_mode"]
+        missing_fields = [field for field in required_fields if field not in data]
         
-        if not self.test_session_id:
-            self.log_test("GET /api/chat/{session_id}/messages", False, "No test session ID available")
-            return
-        
-        response_data = self.run_test(
-            f"GET /api/chat/{self.test_session_id}/messages",
-            "GET",
-            f"chat/{self.test_session_id}/messages",
-            200,
-            expected_fields=["messages"]
-        )
-        
-        if response_data:
-            messages = response_data["messages"]
-            print(f"    Retrieved {len(messages)} messages for session {self.test_session_id[:8]}...")
+        if missing_fields:
+            self.log_test("Laser Send", False, f"Missing fields: {missing_fields}", data)
+            return None
             
-            # Verify message structure
-            if len(messages) > 0:
-                first_msg = messages[0]
-                required_msg_fields = ["id", "session_id", "role", "content", "created_at"]
-                missing_msg_fields = [field for field in required_msg_fields if field not in first_msg]
-                
-                if missing_msg_fields:
-                    print(f"    ⚠ Message missing fields: {missing_msg_fields}")
-                else:
-                    print(f"    ✓ Message structure valid: role={first_msg['role']}, content_length={len(first_msg['content'])}")
-
-    def test_chat_delete(self):
-        """Test DELETE /api/chat/{session_id} - Delete a session"""
-        print("\n=== Testing Chat Session Deletion ===")
-        
-        if not self.test_session_id:
-            self.log_test("DELETE /api/chat/{session_id}", False, "No test session ID available")
-            return
-        
-        response_data = self.run_test(
-            f"DELETE /api/chat/{self.test_session_id}",
-            "DELETE",
-            f"chat/{self.test_session_id}",
-            200,
-            expected_fields=["success"]
-        )
-        
-        if response_data and response_data.get("success"):
-            print(f"    ✓ Session {self.test_session_id[:8]}... deleted successfully")
+        if not data.get("success"):
+            self.log_test("Laser Send", False, f"Success=false in response", data)
+            return None
             
-            # Verify deletion by trying to get messages (should return empty)
-            verify_response = self.run_test(
-                f"GET /api/chat/{self.test_session_id}/messages (verify deletion)",
-                "GET",
-                f"chat/{self.test_session_id}/messages",
-                200
-            )
-            if verify_response and len(verify_response.get("messages", [])) == 0:
-                print("    ✓ Deletion verified: no messages found for deleted session")
+        expected_count = len(test_data["point_data"])
+        if data.get("point_count") != expected_count:
+            self.log_test("Laser Send", False, 
+                         f"Point count mismatch: expected {expected_count}, got {data.get('point_count')}", data)
+            return None
+            
+        self.log_test("Laser Send", True, 
+                     f"success={data['success']}, point_count={data['point_count']}, "
+                     f"simulation_mode={data['simulation_mode']}", data)
+        return data
 
-    def test_chat_send_new_session(self):
-        """Test POST /api/chat/send with session_id=null to create new session"""
-        print("\n=== Testing Chat Send (New Session Creation) ===")
+    def test_laser_status_after_send(self):
+        """Test 3: GET /api/laser/status - Status after sending points"""
+        success, data = self.make_request("GET", "/laser/status")
         
-        test_message = {
-            "message": "Draw a simple line from left to right",
-            "session_id": None  # This should create a new session
+        if not success:
+            self.log_test("Laser Status (After Send)", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        # Should now show streaming=true, point_count=2, current_pattern="Test"
+        expected_streaming = True
+        expected_count = 2
+        expected_pattern = "Test"
+        
+        issues = []
+        if data.get("streaming") != expected_streaming:
+            issues.append(f"streaming={data.get('streaming')}, expected {expected_streaming}")
+        if data.get("point_count") != expected_count:
+            issues.append(f"point_count={data.get('point_count')}, expected {expected_count}")
+        if data.get("current_pattern") != expected_pattern:
+            issues.append(f"current_pattern='{data.get('current_pattern')}', expected '{expected_pattern}'")
+            
+        if issues:
+            self.log_test("Laser Status (After Send)", False, "; ".join(issues), data)
+            return None
+            
+        self.log_test("Laser Status (After Send)", True, 
+                     f"streaming={data['streaming']}, point_count={data['point_count']}, "
+                     f"current_pattern='{data['current_pattern']}'", data)
+        return data
+
+    def test_laser_blackout(self):
+        """Test 4: POST /api/laser/blackout - Clear laser"""
+        success, data = self.make_request("POST", "/laser/blackout")
+        
+        if not success:
+            self.log_test("Laser Blackout", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        if not data.get("success"):
+            self.log_test("Laser Blackout", False, f"Success=false in response", data)
+            return None
+            
+        self.log_test("Laser Blackout", True, f"success={data['success']}", data)
+        return data
+
+    def test_laser_status_after_blackout(self):
+        """Test 5: GET /api/laser/status - Status after blackout"""
+        success, data = self.make_request("GET", "/laser/status")
+        
+        if not success:
+            self.log_test("Laser Status (After Blackout)", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        # Should now show streaming=false, point_count=0
+        expected_streaming = False
+        expected_count = 0
+        
+        issues = []
+        if data.get("streaming") != expected_streaming:
+            issues.append(f"streaming={data.get('streaming')}, expected {expected_streaming}")
+        if data.get("point_count") != expected_count:
+            issues.append(f"point_count={data.get('point_count')}, expected {expected_count}")
+            
+        if issues:
+            self.log_test("Laser Status (After Blackout)", False, "; ".join(issues), data)
+            return None
+            
+        self.log_test("Laser Status (After Blackout)", True, 
+                     f"streaming={data['streaming']}, point_count={data['point_count']}", data)
+        return data
+
+    def test_chat_new_session(self):
+        """Test 6: POST /api/chat/new - Create new chat session"""
+        success, data = self.make_request("POST", "/chat/new")
+        
+        if not success:
+            self.log_test("Chat New Session", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        # Check required fields
+        required_fields = ["id", "title", "created_at"]
+        missing_fields = [field for field in required_fields if field not in data]
+        
+        if missing_fields:
+            self.log_test("Chat New Session", False, f"Missing fields: {missing_fields}", data)
+            return None
+            
+        session_id = data.get("id")
+        if not session_id:
+            self.log_test("Chat New Session", False, "No session ID returned", data)
+            return None
+            
+        self.log_test("Chat New Session", True, 
+                     f"id={session_id}, title='{data.get('title')}'", data)
+        return data
+
+    def test_chat_list_sessions(self):
+        """Test 7: GET /api/chat/sessions - List chat sessions"""
+        success, data = self.make_request("GET", "/chat/sessions")
+        
+        if not success:
+            self.log_test("Chat List Sessions", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        if "sessions" not in data:
+            self.log_test("Chat List Sessions", False, "No 'sessions' field in response", data)
+            return None
+            
+        sessions = data["sessions"]
+        if not isinstance(sessions, list):
+            self.log_test("Chat List Sessions", False, "'sessions' is not a list", data)
+            return None
+            
+        self.log_test("Chat List Sessions", True, f"Found {len(sessions)} sessions", data)
+        return data
+
+    def test_chat_send_message(self):
+        """Test 8: POST /api/chat/send - Send message to AI (120s timeout)"""
+        test_data = {
+            "message": "Draw a simple line",
+            "session_id": None  # Will create new session
         }
         
-        response_data = self.run_test(
-            "POST /api/chat/send (new session)",
-            "POST",
-            "chat/send",
-            200,
-            data=test_message,
-            expected_fields=["session_id", "message", "pattern_name", "point_data", "python_code", "message_id"],
-            timeout=120
-        )
+        logger.info("Sending chat message - this may take 30-60 seconds for LLM processing...")
+        success, data = self.make_request("POST", "/chat/send", test_data, timeout=120)
         
-        if response_data:
-            new_session_id = response_data.get("session_id")
-            if new_session_id:
-                print(f"    ✓ New session created: {new_session_id[:8]}...")
-                
-                # Clean up the new session
-                cleanup_response = self.run_test(
-                    f"DELETE /api/chat/{new_session_id} (cleanup)",
-                    "DELETE",
-                    f"chat/{new_session_id}",
-                    200
-                )
-                if cleanup_response:
-                    print(f"    ✓ Cleanup: deleted test session {new_session_id[:8]}...")
+        if not success:
+            self.log_test("Chat Send Message", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        # Check required response fields
+        required_fields = ["session_id", "message", "pattern_name", "point_data", "python_code", "message_id"]
+        missing_fields = [field for field in required_fields if field not in data]
+        
+        if missing_fields:
+            self.log_test("Chat Send Message", False, f"Missing fields: {missing_fields}", data)
+            return None
+            
+        session_id = data.get("session_id")
+        point_data = data.get("point_data", [])
+        
+        if not session_id:
+            self.log_test("Chat Send Message", False, "No session_id returned", data)
+            return None
+            
+        if not isinstance(point_data, list):
+            self.log_test("Chat Send Message", False, "point_data is not a list", data)
+            return None
+            
+        self.log_test("Chat Send Message", True, 
+                     f"session_id={session_id}, pattern='{data.get('pattern_name')}', "
+                     f"points={len(point_data)}, message_id={data.get('message_id')}", data)
+        return data
 
-    def run_all_tests(self):
-        """Run all tests in the correct order"""
-        print("🚀 Starting Pangolin BEYOND Backend API Tests")
-        print(f"Backend URL: {self.api_url}")
-        print("="*60)
+    def test_chat_get_messages(self, session_id: str):
+        """Test 9: GET /api/chat/{session_id}/messages - Get session messages"""
+        success, data = self.make_request("GET", f"/chat/{session_id}/messages")
         
-        # Test existing endpoints first
-        self.test_existing_endpoints()
+        if not success:
+            self.log_test("Chat Get Messages", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        if "messages" not in data:
+            self.log_test("Chat Get Messages", False, "No 'messages' field in response", data)
+            return None
+            
+        messages = data["messages"]
+        if not isinstance(messages, list):
+            self.log_test("Chat Get Messages", False, "'messages' is not a list", data)
+            return None
+            
+        self.log_test("Chat Get Messages", True, f"Found {len(messages)} messages for session {session_id}", data)
+        return data
+
+    def test_chat_delete_session(self, session_id: str):
+        """Test 10: DELETE /api/chat/{session_id} - Delete session"""
+        success, data = self.make_request("DELETE", f"/chat/{session_id}")
         
-        # Test new chat/AI endpoints in logical order
-        self.test_chat_new()
-        self.test_chat_sessions_list()
-        self.test_chat_send()
-        self.test_chat_messages()
-        self.test_chat_send_new_session()
-        self.test_chat_delete()
+        if not success:
+            self.log_test("Chat Delete Session", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        if not data.get("success"):
+            self.log_test("Chat Delete Session", False, f"Success=false in response", data)
+            return None
+            
+        self.log_test("Chat Delete Session", True, f"Deleted session {session_id}", data)
+        return data
+
+    def test_laser_stop(self):
+        """Test 11: POST /api/laser/stop - Stop streaming"""
+        success, data = self.make_request("POST", "/laser/stop")
         
-        # Print summary
+        if not success:
+            self.log_test("Laser Stop", False, f"Request failed: {data.get('error', 'Unknown error')}")
+            return None
+            
+        if not data.get("success"):
+            self.log_test("Laser Stop", False, f"Success=false in response", data)
+            return None
+            
+        self.log_test("Laser Stop", True, f"success={data['success']}", data)
+        return data
+
+    def run_full_test_sequence(self):
+        """Run the complete test sequence as specified in the review request"""
+        logger.info(f"Starting comprehensive backend test for {self.base_url}")
+        logger.info("=" * 80)
+        
+        # Test sequence as specified in review request
+        session_id = None
+        
+        # 1. Initial laser status
+        self.test_laser_status_initial()
+        
+        # 2. Send laser data
+        self.test_laser_send()
+        
+        # 3. Check status after send
+        self.test_laser_status_after_send()
+        
+        # 4. Blackout laser
+        self.test_laser_blackout()
+        
+        # 5. Check status after blackout
+        self.test_laser_status_after_blackout()
+        
+        # 6. Create new chat session
+        session_data = self.test_chat_new_session()
+        if session_data:
+            session_id = session_data.get("id")
+        
+        # 7. List chat sessions
+        self.test_chat_list_sessions()
+        
+        # 8. Send chat message (120s timeout for LLM)
+        chat_response = self.test_chat_send_message()
+        if chat_response and not session_id:
+            session_id = chat_response.get("session_id")
+        
+        # 9. Get messages for session
+        if session_id:
+            self.test_chat_get_messages(session_id)
+        else:
+            self.log_test("Chat Get Messages", False, "No session_id available from previous tests")
+        
+        # 10. Delete session
+        if session_id:
+            self.test_chat_delete_session(session_id)
+        else:
+            self.log_test("Chat Delete Session", False, "No session_id available from previous tests")
+        
+        # 11. Stop laser streaming
+        self.test_laser_stop()
+        
+        # Summary
         self.print_summary()
 
     def print_summary(self):
         """Print test summary"""
-        print("\n" + "="*60)
-        print("TEST SUMMARY")
-        print("="*60)
+        logger.info("=" * 80)
+        logger.info("TEST SUMMARY")
+        logger.info("=" * 80)
         
-        print(f"Total Tests: {self.tests_run}")
-        print(f"Passed: {self.tests_passed}")
-        print(f"Failed: {self.tests_run - self.tests_passed}")
-        print(f"Success Rate: {(self.tests_passed/self.tests_run)*100:.1f}%")
+        total_tests = len(self.test_results)
+        passed_tests = sum(1 for result in self.test_results if result["success"])
+        failed_tests = total_tests - passed_tests
         
-        failed_tests = [result for result in self.test_results if not result["success"]]
-        if failed_tests:
-            print("\nFAILED TESTS:")
-            for result in failed_tests:
-                print(f"❌ {result['test_name']}: {result['details']}")
+        logger.info(f"Total Tests: {total_tests}")
+        logger.info(f"Passed: {passed_tests}")
+        logger.info(f"Failed: {failed_tests}")
+        logger.info("")
         
-        print("\n" + "="*60)
+        if failed_tests > 0:
+            logger.info("FAILED TESTS:")
+            for result in self.test_results:
+                if not result["success"]:
+                    logger.info(f"❌ {result['test']}: {result['details']}")
+            logger.info("")
         
-        return len(failed_tests) == 0
+        logger.info("ALL TESTS:")
+        for result in self.test_results:
+            status = "✅" if result["success"] else "❌"
+            logger.info(f"{status} {result['test']}")
+        
+        return passed_tests, failed_tests
+
 
 def main():
-    """Main test runner"""
-    tester = BeyondAPITester()
-    tester.run_all_tests()
+    """Main test execution"""
+    tester = BeyondAPITester(BACKEND_URL)
+    tester.run_full_test_sequence()
     
-    # Return exit code based on test results
-    all_passed = tester.tests_passed == tester.tests_run
-    return 0 if all_passed else 1
+    passed, failed = tester.print_summary()
+    
+    # Exit with error code if any tests failed
+    if failed > 0:
+        sys.exit(1)
+    else:
+        logger.info("🎉 All tests passed!")
+        sys.exit(0)
+
 
 if __name__ == "__main__":
-    try:
-        exit_code = main()
-        sys.exit(exit_code)
-    except KeyboardInterrupt:
-        print("\n⚠ Tests interrupted by user")
-        sys.exit(1)
-    except Exception as e:
-        print(f"\n💥 Test runner error: {e}")
-        sys.exit(1)
+    main()
