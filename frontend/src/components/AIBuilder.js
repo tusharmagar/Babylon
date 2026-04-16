@@ -22,7 +22,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import LaserPreview from "@/components/LaserPreview";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8001";
 const API = `${BACKEND_URL}/api`;
 
 // Code block with copy + download
@@ -310,7 +310,7 @@ const AIBuilder = ({ sdkStatus }) => {
       const res = await axios.post(`${API}/chat/send`, {
         message: messageText,
         session_id: currentSessionId,
-      });
+      }, { timeout: 120000 });
 
       const data = res.data;
 
@@ -344,6 +344,15 @@ const AIBuilder = ({ sdkStatus }) => {
       toast.success("Blackout — laser cleared");
     } catch {
       toast.error("Failed to blackout");
+    }
+  };
+
+  const handleStopStream = async () => {
+    try {
+      await axios.post(`${API}/laser/stop`);
+      toast.success("Stream stopped");
+    } catch {
+      toast.error("Failed to stop stream");
     }
   };
 
@@ -397,8 +406,15 @@ const AIBuilder = ({ sdkStatus }) => {
             )}
           </div>
         </ScrollArea>
-        {/* Quick blackout button in sidebar */}
-        <div className="p-3 border-t border-white/10">
+        {/* Quick controls in sidebar */}
+        <div className="p-3 border-t border-white/10 space-y-2">
+          <button
+            onClick={handleStopStream}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-amber-600/20 border border-amber-500/30 text-amber-400 hover:bg-amber-600/30 text-xs font-semibold transition-all"
+          >
+            <Zap className="w-3.5 h-3.5" />
+            STOP STREAM
+          </button>
           <button
             onClick={handleBlackout}
             className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-lg bg-red-600/20 border border-red-500/30 text-red-400 hover:bg-red-600/30 text-xs font-semibold transition-all"

@@ -7,14 +7,15 @@ import React, { useRef, useEffect, useCallback } from "react";
 const LaserPreview = ({ pointData = [], className = "" }) => {
   const canvasRef = useRef(null);
 
-  const parseColor = (colorStr) => {
-    // Parse color from "0x00RRGGBB" or hex integer format
-    // BEYOND format: R | (G<<8) | (B<<16) — so byte order is R, G, B from low to high
+  const parseColor = (colorVal) => {
+    // Parse color — can be integer (255, 65280) or hex string ("0x000000FF")
+    // BEYOND format: R | (G<<8) | (B<<16) — byte order is R, G, B from low to high
     let colorInt;
-    if (typeof colorStr === "string") {
-      colorInt = parseInt(colorStr, 16) || 0;
+    if (typeof colorVal === "string") {
+      colorInt = colorVal.startsWith("0x") ? parseInt(colorVal, 16) : parseInt(colorVal, 10);
+      colorInt = colorInt || 0;
     } else {
-      colorInt = colorStr || 0;
+      colorInt = colorVal || 0;
     }
 
     const r = colorInt & 0xff;
