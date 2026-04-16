@@ -62,24 +62,52 @@ const LogEntry = ({ log }) => {
   );
 };
 
+// Parse ngrok URL helper
+const parseNgrokUrl = (url) => {
+  // Handle formats like: tcp://0.tcp.in.ngrok.io:18361 or 0.tcp.in.ngrok.io:18361
+  let cleaned = url.trim();
+  
+  // Remove tcp:// prefix if present
+  if (cleaned.startsWith('tcp://')) {
+    cleaned = cleaned.substring(6);
+  }
+  
+  // Split host and port
+  const parts = cleaned.split(':');
+  if (parts.length === 2) {
+    const host = parts[0];
+    const port = parseInt(parts[1], 10);
+    if (host && !isNaN(port)) {
+      return { host, port };
+    }
+  }
+  
+  return null;
+};
+
 // Settings Dialog Component
 const SettingsDialog = ({ open, onOpenChange, config, onSave, onConnect, onDisconnect, connected }) => {
-  const [host, setHost] = useState(config.host || '');
-  const [port, setPort] = useState(config.port || 16063);
+  const [ngrokUrl, setNgrokUrl] = useState('');
   const [timeout, setTimeout] = useState(config.timeout || 5);
 
   useEffect(() => {
-    setHost(config.host || '');
-    setPort(config.port || 16063);
+    if (config.host && config.port) {
+      setNgrokUrl(`tcp://${config.host}:${config.port}`);
+    }
     setTimeout(config.timeout || 5);
   }, [config]);
 
+  const handleUrlChange = (e) => {
+    setNgrokUrl(e.target.value);
+  };
+
   const handleConnect = async () => {
-    if (!host || !port) {
-      toast.error('Please enter host and port');
+    const parsed = parseNgrokUrl(ngrokUrl);
+    if (!parsed) {
+      toast.error('Invalid URL format. Use: tcp://host:port or host:port');
       return;
     }
-    await onConnect({ host, port: parseInt(port), timeout: parseFloat(timeout) });
+    await onConnect({ host: parsed.host, port: parsed.port, timeout: parseFloat(timeout) });
   };
 
   return (
@@ -90,27 +118,16 @@ const SettingsDialog = ({ open, onOpenChange, config, onSave, onConnect, onDisco
         </DialogHeader>
         <div className="space-y-4 py-4">
           <div className="space-y-2">
-            <Label htmlFor="host" className="text-zinc-400">ngrok Host</Label>
+            <Label htmlFor="ngrokUrl" className="text-zinc-400">ngrok URL</Label>
             <Input
-              id="host"
-              data-testid="settings-host-input"
-              value={host}
-              onChange={(e) => setHost(e.target.value)}
-              placeholder="example.tcp.ngrok.io"
-              className="bg-[#0A0A0A] border-white/10 text-white placeholder:text-zinc-600"
+              id="ngrokUrl"
+              data-testid="settings-ngrok-url-input"
+              value={ngrokUrl}
+              onChange={handleUrlChange}
+              placeholder="tcp://0.tcp.in.ngrok.io:18361"
+              className="bg-[#0A0A0A] border-white/10 text-white placeholder:text-zinc-600 font-mono text-sm"
             />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="port" className="text-zinc-400">Port</Label>
-            <Input
-              id="port"
-              data-testid="settings-port-input"
-              type="number"
-              value={port}
-              onChange={(e) => setPort(e.target.value)}
-              placeholder="16063"
-              className="bg-[#0A0A0A] border-white/10 text-white placeholder:text-zinc-600"
-            />
+            <p className="text-xs text-zinc-500">Paste your full ngrok TCP URL</p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="timeout" className="text-zinc-400">Timeout (seconds)</Label>
