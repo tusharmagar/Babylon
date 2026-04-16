@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, '/app/backend')
 
 # Test configuration
-BACKEND_URL = "https://youtube-to-laser.preview.emergentagent.com/api"
+BACKEND_URL = "https://asyncio-laser-stream.preview.emergentagent.com/api"
 TEST_YOUTUBE_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
 def test_service_modules():
