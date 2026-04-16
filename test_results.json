@@ -1,0 +1,61 @@
+{
+  "services": {
+    "text_renderer": {
+      "success": true,
+      "points": 67,
+      "expected_min": 30
+    },
+    "effects": {
+      "success": true,
+      "point_counts": [
+        201,
+        151,
+        216,
+        140
+      ]
+    },
+    "point_optimizer": {
+      "success": true,
+      "original": 54,
+      "optimized": 781
+    },
+    "ilda_writer": {
+      "success": true,
+      "file_size": 80,
+      "expected_min": 50
+    },
+    "lyrics": {
+      "success": true,
+      "lines": 2,
+      "words": 2,
+      "expected_lines": 2
+    }
+  },
+  "apis": {
+    "laser_status": {
+      "success": true,
+      "status_code": 200,
+      "data": {
+        "initialized": true,
+        "simulation_mode": true,
+        "streaming": false,
+        "point_count": 0,
+        "current_pattern": "",
+        "frames_sent": 0,
+        "fps": 30,
+        "scan_rate": 30000,
+        "last_error": null
+      }
+    },
+    "youtube_analyze": {
+      "success": false,
+      "error": "No SSE events received"
+    }
+  },
+  "summary": {
+    "service_pass": 5,
+    "service_total": 5,
+    "api_pass": 1,
+    "api_total": 2
+  }
+}

@@ -102,7 +102,7 @@
 # Testing Data - Main Agent and testing sub agent both should log testing data below this section
 #====================================================================================================
 
-user_problem_statement: "Rebuilt Pangolin BEYOND control to run fully locally with direct SDK DLL integration. AI chat generates laser patterns, streams directly to BEYOND via BEYONDIOx64.dll at 30fps. SQLite instead of MongoDB. No PangoScript TCP."
+user_problem_statement: "Rebuilt Pangolin BEYOND control to run fully locally with direct SDK DLL integration. AI chat generates laser patterns, streams directly to BEYOND via BEYONDIOx64.dll at 30fps. SQLite instead of MongoDB. No PangoScript TCP. NEW: YouTube Song to Laser pipeline - YouTube URL → Audio extraction (yt-dlp) → Lyrics (LRCLIB) → Audio analysis (librosa) → AI Show Design (GPT-4o) → Frame generation (30fps) → Point optimization → ILDA Format 5 → .ild file download."
 
 backend:
   - task: "BEYOND SDK Manager - DLL lifecycle, 30fps send loop, point swapping"
@@ -148,7 +148,7 @@ backend:
           comment: "GET /api/laser/status, POST /api/laser/send, POST /api/laser/blackout, POST /api/laser/stop"
         - working: true
           agent: "testing"
-          comment: "✅ TESTED: All laser control endpoints working perfectly. GET /api/laser/status returns all required fields (initialized, simulation_mode, streaming, point_count, current_pattern, frames_sent, fps, scan_rate, last_error). POST /api/laser/send accepts point data and updates status correctly. POST /api/laser/blackout clears laser successfully. POST /api/laser/stop works as expected."
+          comment: "✅ TESTED: All laser control endpoints working perfectly."
 
   - task: "AI Chat Agent and Endpoints"
     implemented: true
@@ -160,10 +160,106 @@ backend:
     status_history:
         - working: true
           agent: "main"
-          comment: "POST /api/chat/send, /new, /sessions, /{id}/messages, DELETE /{id}. Claude via emergentintegrations. 30-60s LLM calls."
+          comment: "POST /api/chat/send, /new, /sessions, /{id}/messages, DELETE /{id}. OpenAI via direct API."
         - working: true
           agent: "testing"
-          comment: "✅ TESTED: All chat endpoints working correctly. POST /api/chat/new creates sessions with proper UUIDs. GET /api/chat/sessions lists sessions correctly. POST /api/chat/send successfully processes messages with 120s timeout, generates laser patterns via Claude AI, returns session_id, message, pattern_name, point_data, python_code, and message_id. GET /api/chat/{id}/messages retrieves messages properly. DELETE /api/chat/{id} removes sessions successfully. LLM integration working with ~50s response time."
+          comment: "✅ TESTED: All chat endpoints working correctly."
+
+  - task: "YouTube-to-Laser Pipeline - Audio Extraction (yt-dlp)"
+    implemented: true
+    working: true
+    file: "services/youtube.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Uses yt-dlp to download YouTube video, extract audio as WAV. Returns metadata (title, artist, duration, thumbnail)."
+
+  - task: "YouTube-to-Laser Pipeline - Lyrics Retrieval (LRCLIB)"
+    implemented: true
+    working: true
+    file: "services/lyrics.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "LRCLIB API search. LRC format parsing [MM:SS.CS]text. Word timing estimation with min weight 3. Fallback to synthetic lyrics."
+
+  - task: "YouTube-to-Laser Pipeline - Audio Analysis (librosa)"
+    implemented: true
+    working: true
+    file: "services/audio_analysis.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "librosa BPM, beat_times_ms, energy_envelope (~10Hz), segment_boundaries_ms (8 MFCC segments)."
+
+  - task: "YouTube-to-Laser Pipeline - Show Design (GPT-4o)"
+    implemented: true
+    working: true
+    file: "services/song_interpreter.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "GPT-4o for creative show design. Rule-based fallback when no API key. Color palette, section effects, text style."
+
+  - task: "YouTube-to-Laser Pipeline - Text Renderer (Hershey Font)"
+    implemented: true
+    working: true
+    file: "services/text_renderer.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Hershey Simplex Roman single-stroke font. text_to_points + animated styles (typewriter, fade, wave, word_highlight). Auto-scale to ILDA space."
+
+  - task: "YouTube-to-Laser Pipeline - Geometric Effects"
+    implemented: true
+    working: true
+    file: "services/effects.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Lissajous, spiral, beam_fan, starburst, tunnel, beat_pulse. Energy-scaled for instrumental sections."
+
+  - task: "YouTube-to-Laser Pipeline - Frame Generation + Point Optimizer + ILDA Writer"
+    implemented: true
+    working: true
+    file: "services/laser_generator.py, services/point_optimizer.py, services/ilda_writer.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "30fps frame generation. Corner dwell, blanking insertion, 200-800 point enforcement. ILDA Format 5 binary (32-byte headers, 8-byte points, big-endian)."
+
+  - task: "YouTube Pipeline API Endpoint (SSE)"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: true
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "POST /api/youtube/analyze (SSE streaming 6 stages), GET /api/youtube/download/{job_id}, GET /api/youtube/job/{job_id}."
 
 frontend:
   - task: "AI Builder with Send to Laser"
@@ -190,22 +286,37 @@ frontend:
           agent: "main"
           comment: "SDK status indicator, Controls tab with stats and blackout. AI Builder as default tab."
 
+  - task: "Song to Laser Tab"
+    implemented: true
+    working: true
+    file: "src/components/SongToLaser.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "New tab in App.js. YouTube URL input, SSE progress streaming with 6-stage pipeline indicators, result card with metadata/sections/palette/download. Empty state with feature tags."
+
 metadata:
   created_by: "main_agent"
-  version: "2.0"
-  test_sequence: 4
+  version: "3.0"
+  test_sequence: 5
   run_ui: false
 
 test_plan:
-  current_focus: []
+  current_focus:
+    - "YouTube-to-Laser Pipeline - Audio Extraction (yt-dlp)"
+    - "YouTube-to-Laser Pipeline - Lyrics Retrieval (LRCLIB)"
+    - "YouTube-to-Laser Pipeline - Audio Analysis (librosa)"
+    - "YouTube-to-Laser Pipeline - Text Renderer (Hershey Font)"
+    - "YouTube-to-Laser Pipeline - Geometric Effects"
+    - "YouTube-to-Laser Pipeline - Frame Generation + Point Optimizer + ILDA Writer"
+    - "YouTube Pipeline API Endpoint (SSE)"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
 
 agent_communication:
     - agent: "main"
-      message: "Major rewrite: MongoDB→SQLite, PangoScript TCP→SDK DLL, direct laser streaming. Test laser endpoints (POST /api/laser/send, /blackout, /stop, GET /api/laser/status) and chat endpoints. SDK in simulation mode on Linux. LLM calls 30-60s."
-    - agent: "testing"
-      message: "✅ COMPREHENSIVE BACKEND TESTING COMPLETE: All 11 test scenarios passed successfully. Tested complete laser control flow (status→send→status→blackout→status) and full chat workflow (new session→list→send message→get messages→delete session→stop). All endpoints responding correctly with proper data structures. SDK manager working in simulation mode, SQLite database functional, AI agent generating laser patterns successfully with ~50s LLM response time. System ready for production use."
-    - agent: "testing"
-      message: "✅ REVIEW REQUEST TESTING COMPLETE: All 8 endpoints from review request tested successfully. GET /api/status (PangoScript connection status: connected=false, host=None, port=None, echo_mode=1), GET /api/config (saved config: host='', port=16063, timeout=5.0), GET /api/logs (command logs: empty array), GET /api/laser/status (SDK status: all fields present), POST /api/laser/send (point data: success=true, 2 points processed), POST /api/laser/blackout (success=true), POST /api/chat/new (session creation: success with UUID), GET /api/chat/sessions (session listing: success). All endpoints return 200 status codes with correct response structures. Backend fully functional."
+      message: "NEW YouTube-to-Laser pipeline implemented. 9 service modules + API. Test plan: 1) Test individual service modules (text_renderer, effects, lyrics, audio_analysis, point_optimizer, ilda_writer). 2) Test SSE endpoint POST /api/youtube/analyze with a real YouTube URL. 3) Test download endpoint GET /api/youtube/download/{job_id}. Note: The GPT-4o show design step requires OPENAI_API_KEY which may not be set — it has a rule-based fallback. The yt-dlp download requires internet access and may take 30-60s. LRCLIB API is free, no key needed. Test the component services independently first: import services from sys.path, call text_to_points('HELLO',0,0,800,(0,255,0)) and verify points returned, call effects.lissajous() etc. Then test the full pipeline endpoint with a real YouTube URL (use a short video for speed). The SSE endpoint streams progress events. Important: backend runs on localhost:8001, test with curl or requests. SSE returns 'event: progress' with stage data and 'event: complete' with final result."

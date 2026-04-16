@@ -3,7 +3,7 @@ import "@/App.css";
 import axios from "axios";
 import {
   Settings, Power, Square, AlertTriangle, Terminal, Wifi, WifiOff,
-  Trash2, Cpu, LayoutGrid, Zap, ZapOff,
+  Trash2, Cpu, LayoutGrid, Zap, ZapOff, Music,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import AIBuilder from "@/components/AIBuilder";
+import SongToLaser from "@/components/SongToLaser";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8001";
 const API = `${BACKEND_URL}/api`;
@@ -328,6 +329,12 @@ function App() {
             >
               <Cpu className="w-4 h-4" /> AI Builder
             </TabsTrigger>
+            <TabsTrigger
+              value="song-to-laser"
+              className="data-[state=active]:bg-green-600 data-[state=active]:text-white text-zinc-400 px-4 py-2 rounded-md text-sm font-semibold transition-all gap-2"
+            >
+              <Music className="w-4 h-4" /> Song to Laser
+            </TabsTrigger>
           </TabsList>
 
           {/* ===== Cues Tab ===== */}
@@ -413,6 +420,11 @@ function App() {
           {/* ===== AI Builder Tab ===== */}
           <TabsContent value="ai-builder">
             <AIBuilder sdkStatus={sdkStatus} />
+          </TabsContent>
+
+          {/* ===== Song to Laser Tab ===== */}
+          <TabsContent value="song-to-laser">
+            <SongToLaser />
           </TabsContent>
         </Tabs>
       </main>

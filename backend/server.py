@@ -1,7 +1,10 @@
 from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from sse_starlette.sse import EventSourceResponse
 import os
+import json
 import logging
 import asyncio
 import socket
@@ -197,6 +200,9 @@ class ChatMessageRequest(BaseModel):
 class LaserSendRequest(BaseModel):
     point_data: List[Dict[str, Any]]
     pattern_name: str = ""
+
+class YouTubeAnalyzeRequest(BaseModel):
+    youtube_url: str
 
 
 # ===== Lifespan =====
@@ -525,6 +531,186 @@ async def send_chat_message(request: ChatMessageRequest):
         "python_code": ai_response.get("python_code", ""),
         "message_id": msg_id,
     }
+
+
+# ===== YouTube-to-Laser Pipeline =====
+
+# Job storage for tracking active pipeline jobs
+_active_jobs: Dict[str, dict] = {}
+JOBS_DIR = ROOT_DIR / "jobs"
+JOBS_DIR.mkdir(exist_ok=True)
+
+
+@api_router.post("/youtube/analyze")
+async def youtube_analyze(request: YouTubeAnalyzeRequest):
+    """Run the full YouTube-to-Laser pipeline with SSE progress streaming."""
+    
+    async def event_generator():
+        job_id = str(uuid.uuid4())[:8]
+        job_dir = JOBS_DIR / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        
+        _active_jobs[job_id] = {"status": "starting", "job_dir": str(job_dir)}
+        
+        def send_event(stage: str, data: dict = None):
+            payload = {"stage": stage, "job_id": job_id}
+            if data:
+                payload.update(data)
+            return json.dumps(payload)
+        
+        try:
+            # Stage 1: Extract audio
+            yield {"event": "progress", "data": send_event("extracting_audio")}
+            
+            from services.youtube import extract_audio
+            metadata = await asyncio.get_event_loop().run_in_executor(
+                None, extract_audio, request.youtube_url, job_dir
+            )
+            
+            yield {"event": "progress", "data": send_event("extracting_audio_done", {
+                "title": metadata['title'],
+                "artist": metadata['artist'],
+                "duration": metadata['duration'],
+                "thumbnail_url": metadata.get('thumbnail_url', ''),
+            })}
+            
+            # Stage 2: Fetch lyrics
+            yield {"event": "progress", "data": send_event("fetching_lyrics")}
+            
+            from services.lyrics import fetch_lyrics
+            lyrics = await asyncio.get_event_loop().run_in_executor(
+                None, fetch_lyrics, metadata['title'], metadata['artist'], metadata['duration']
+            )
+            
+            yield {"event": "progress", "data": send_event("fetching_lyrics_done", {
+                "lyric_count": len(lyrics),
+                "has_synced": any(l.words for l in lyrics),
+            })}
+            
+            # Stage 3: Analyze audio
+            yield {"event": "progress", "data": send_event("analyzing_audio")}
+            
+            from services.audio_analysis import analyze_audio
+            analysis = await asyncio.get_event_loop().run_in_executor(
+                None, analyze_audio, metadata['wav_path']
+            )
+            
+            yield {"event": "progress", "data": send_event("analyzing_audio_done", {
+                "bpm": analysis['bpm'],
+                "beat_count": len(analysis['beat_times_ms']),
+                "segments": len(analysis['segment_boundaries_ms']) - 1,
+            })}
+            
+            # Stage 4: Design show
+            yield {"event": "progress", "data": send_event("designing_show")}
+            
+            from services.song_interpreter import design_show
+            design = await design_show(lyrics, analysis, metadata['title'], metadata['artist'])
+            
+            yield {"event": "progress", "data": send_event("designing_show_done", {
+                "sections": len(design.sections),
+                "text_style": design.text_style,
+                "palette_size": len(design.color_palette),
+            })}
+            
+            # Stage 5: Generate frames
+            yield {"event": "progress", "data": send_event("generating_frames")}
+            
+            from services.laser_generator import generate_show
+            from services.point_optimizer import optimize_frame
+            
+            frames = await asyncio.get_event_loop().run_in_executor(
+                None, generate_show, lyrics, design, analysis
+            )
+            
+            # Optimize each frame
+            for frame in frames:
+                frame.points = optimize_frame(frame.points)
+            
+            yield {"event": "progress", "data": send_event("generating_frames_done", {
+                "total_frames": len(frames),
+                "duration_s": analysis['duration_s'],
+            })}
+            
+            # Stage 6: Write ILDA file
+            yield {"event": "progress", "data": send_event("writing_ilda")}
+            
+            from services.ilda_writer import write_ilda_file
+            ilda_filename = f"{metadata['artist']}_{metadata['title']}.ild".replace(' ', '_').replace('/', '_')[:60]
+            ilda_path = job_dir / ilda_filename
+            
+            file_size = await asyncio.get_event_loop().run_in_executor(
+                None, write_ilda_file, frames, ilda_path
+            )
+            
+            yield {"event": "progress", "data": send_event("writing_ilda_done", {
+                "ilda_filename": ilda_filename,
+                "file_size_kb": round(file_size / 1024, 1),
+            })}
+            
+            # Store job info for download
+            _active_jobs[job_id] = {
+                "status": "complete",
+                "job_dir": str(job_dir),
+                "ilda_path": str(ilda_path),
+                "ilda_filename": ilda_filename,
+                "metadata": {
+                    "title": metadata['title'],
+                    "artist": metadata['artist'],
+                    "duration": metadata['duration'],
+                    "thumbnail_url": metadata.get('thumbnail_url', ''),
+                },
+                "bpm": analysis['bpm'],
+                "total_frames": len(frames),
+                "file_size_kb": round(file_size / 1024, 1),
+                "sections": [{"label": s.label, "start_ms": s.start_ms, "end_ms": s.end_ms, "energy": s.energy} for s in design.sections],
+                "lyric_count": len(lyrics),
+                "design": {
+                    "text_style": design.text_style,
+                    "intensity_curve": design.intensity_curve,
+                    "palette": [list(c) for c in design.color_palette],
+                },
+            }
+            
+            # Complete event
+            yield {"event": "complete", "data": json.dumps(_active_jobs[job_id])}
+            
+        except Exception as e:
+            logger.error(f"YouTube pipeline error: {e}", exc_info=True)
+            yield {"event": "error", "data": json.dumps({
+                "stage": "error",
+                "job_id": job_id,
+                "error": str(e),
+            })}
+    
+    return EventSourceResponse(event_generator())
+
+
+@api_router.get("/youtube/download/{job_id}")
+async def youtube_download(job_id: str):
+    """Download the generated .ild file for a job."""
+    job = _active_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    ilda_path = job.get('ilda_path')
+    if not ilda_path or not Path(ilda_path).exists():
+        raise HTTPException(status_code=404, detail="ILDA file not found")
+    
+    return FileResponse(
+        path=ilda_path,
+        filename=job.get('ilda_filename', 'show.ild'),
+        media_type='application/octet-stream',
+    )
+
+
+@api_router.get("/youtube/job/{job_id}")
+async def youtube_job_status(job_id: str):
+    """Get the status of a YouTube pipeline job."""
+    job = _active_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
 
 
 # ===== Wire Up =====
