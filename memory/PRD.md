@@ -53,6 +53,18 @@ Build a full-stack app to control Pangolin BEYOND laser software via PangoScript
 - [x] Command log panel with terminal styling
 - [x] All tests passing (100% backend, 100% frontend, 100% integration)
 
+### AI Builder Feature (New)
+- [x] AI Chat Agent using Anthropic Claude via emergentintegrations
+- [x] System prompt with comprehensive BEYOND SDK documentation
+- [x] Generates point data arrays (x, y, color, rep_count) from natural language
+- [x] Generates complete Python scripts using ctypes + BEYONDIOx64.dll
+- [x] Chat session management with MongoDB persistence (CRUD)
+- [x] Tabbed UI layout: Cues | AI Builder
+- [x] Chat interface with sessions sidebar, suggestion chips
+- [x] Laser Preview canvas with glow effects rendering point data
+- [x] Code viewer panel with copy/download functionality
+- [x] Conversation history support for multi-turn interactions
+
 ## Prioritized Backlog
 
 ### P0 (Next)
