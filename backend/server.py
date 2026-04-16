@@ -8,6 +8,7 @@ import json
 import logging
 import asyncio
 import socket
+import subprocess
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
@@ -120,19 +121,28 @@ class BeyondConnectionManager:
             self.connected = False
             self.add_log("CONNECTION", "Disconnected")
 
+    def _send_sync(self, command: str) -> str:
+        """Blocking send — runs in executor thread so it doesn't freeze the event loop."""
+        full_command = f"{command}\r\n"
+        self.socket.sendall(full_command.encode('ascii'))
+        self.socket.settimeout(1.5)
+        try:
+            response = self.socket.recv(1024).decode('ascii', errors='replace').strip()
+        except socket.timeout:
+            response = "(no response)"
+        return response
+
     async def _send_raw_internal(self, command: str) -> Optional[str]:
         if not self.socket or not self.connected:
             return None
         try:
-            full_command = f"{command}\r\n"
-            self.socket.sendall(full_command.encode('ascii'))
-            self.socket.settimeout(2.0)
-            try:
-                response = self.socket.recv(1024).decode('ascii').strip()
-            except socket.timeout:
-                response = "(no response)"
+            loop = asyncio.get_event_loop()
+            response = await asyncio.wait_for(
+                loop.run_in_executor(None, self._send_sync, command),
+                timeout=2.5,
+            )
             return response
-        except Exception as e:
+        except (asyncio.TimeoutError, Exception) as e:
             self.connected = False
             raise e
 
@@ -165,6 +175,10 @@ class BeyondConnectionManager:
 # ===== Global Instances =====
 beyond_manager = BeyondConnectionManager()
 sdk_manager = BeyondSDKManager()
+
+# Let sdk_manager use the live TCP socket for StopAllNow (works with remote/ngrok BEYOND)
+import sdk_manager as _sdk_manager_module
+_sdk_manager_module.set_beyond_manager(beyond_manager)
 
 ai_agent = None
 try:
@@ -212,12 +226,31 @@ async def lifespan(app: FastAPI):
     db.init_db()
     sdk_manager.initialize()
     sdk_manager.start_send_loop()
+    _load_library_from_disk()
     logger.info("Server started — DB initialized, SDK manager running")
     yield
     # Shutdown
     await beyond_manager.disconnect()
     sdk_manager.shutdown()
     logger.info("Server shut down cleanly")
+
+
+def _load_library_from_disk():
+    """Scan jobs/ directory and rebuild _active_jobs from meta.json files."""
+    jobs_dir = ROOT_DIR / "jobs"
+    if not jobs_dir.exists():
+        return
+    count = 0
+    for meta_file in jobs_dir.glob("*/meta.json"):
+        try:
+            meta = json.loads(meta_file.read_text())
+            job_id = meta.get("job_id") or meta_file.parent.name
+            meta["job_id"] = job_id
+            _active_jobs[job_id] = meta
+            count += 1
+        except Exception as e:
+            logger.warning(f"Failed to load {meta_file}: {e}")
+    logger.info(f"Library: loaded {count} saved songs from disk")
 
 
 # Create app
@@ -541,10 +574,6 @@ _stored_frames: Dict[str, list] = {}  # job_id -> list of LaserFrame (for SDK st
 JOBS_DIR = ROOT_DIR / "jobs"
 JOBS_DIR.mkdir(exist_ok=True)
 
-# SDK Streamer (single active instance)
-_sdk_streamer = None
-
-
 @api_router.post("/youtube/analyze")
 async def youtube_analyze(request: YouTubeAnalyzeRequest):
     """Run the full YouTube-to-Laser pipeline with SSE progress streaming."""
@@ -643,7 +672,12 @@ async def youtube_analyze(request: YouTubeAnalyzeRequest):
             yield {"event": "progress", "data": send_event("writing_ilda")}
             
             from services.ilda_writer import write_ilda_file
-            ilda_filename = f"{metadata['artist']}_{metadata['title']}.ild".replace(' ', '_').replace('/', '_')[:60]
+            # Sanitize filename: only keep letters, digits, spaces, hyphens, underscores
+            import re as _re
+            raw_name = f"{metadata['artist']}_{metadata['title']}"
+            safe_name = _re.sub(r'[^\w\s-]', '', raw_name)
+            safe_name = _re.sub(r'\s+', '_', safe_name).strip('_')
+            ilda_filename = (safe_name[:60] or "show") + ".ild"
             ilda_path = job_dir / ilda_filename
             
             file_size = await asyncio.get_event_loop().run_in_executor(
@@ -680,6 +714,10 @@ async def youtube_analyze(request: YouTubeAnalyzeRequest):
                 },
             }
             
+            # Save metadata to disk so we can rebuild library on restart
+            meta_path = job_dir / "meta.json"
+            meta_path.write_text(json.dumps(_active_jobs[job_id], indent=2))
+
             # Complete event
             yield {"event": "complete", "data": json.dumps(_active_jobs[job_id])}
             
@@ -721,6 +759,199 @@ async def youtube_job_status(job_id: str):
     return job
 
 
+# ===== GIF Library Endpoints =====
+
+GIFS_DIR = ROOT_DIR / "gifs"
+GIFS_DIR.mkdir(exist_ok=True)
+
+
+class GifUploadRequest(BaseModel):
+    url: str
+    name: Optional[str] = None
+
+
+def _load_gif_library():
+    """Scan gifs/ and return list of all saved GIFs."""
+    items = []
+    for meta_file in GIFS_DIR.glob("*/meta.json"):
+        try:
+            meta = json.loads(meta_file.read_text())
+            items.append(meta)
+        except Exception as e:
+            logger.warning(f"Failed to load {meta_file}: {e}")
+    items.sort(key=lambda m: m.get("created_at", ""), reverse=True)
+    return items
+
+
+@api_router.post("/gifs/upload")
+async def gifs_upload(request: GifUploadRequest):
+    """Download + vectorize a GIF from a URL and save to the library."""
+    from services.gif_processor import download_gif, vectorize_gif
+
+    gif_id = str(uuid.uuid4())[:8]
+    gif_dir = GIFS_DIR / gif_id
+    gif_dir.mkdir()
+
+    try:
+        # Download (blocking I/O — use executor)
+        loop = asyncio.get_event_loop()
+        gif_bytes = await loop.run_in_executor(None, download_gif, request.url)
+
+        source_path = gif_dir / "source.gif"
+        source_path.write_bytes(gif_bytes)
+
+        # Vectorize (CPU-bound — use executor)
+        frames, durations, size = await loop.run_in_executor(
+            None, vectorize_gif, gif_bytes
+        )
+
+        if not frames:
+            raise ValueError("No frames could be vectorized")
+
+        # Save frames as compact JSON (nested lists)
+        frames_path = gif_dir / "frames.json"
+        frames_path.write_text(json.dumps({
+            "frames": [[list(p) for p in f] for f in frames],
+            "durations_ms": durations,
+        }))
+
+        # Derive name
+        name = request.name or request.url.split("/")[-1].split("?")[0] or gif_id
+        if len(name) > 50:
+            name = name[:50]
+
+        avg_pts = sum(len(f) for f in frames) / len(frames)
+        total_ms = sum(durations)
+
+        meta = {
+            "gif_id": gif_id,
+            "name": name,
+            "source_url": request.url,
+            "frame_count": len(frames),
+            "duration_ms": total_ms,
+            "avg_points": round(avg_pts),
+            "width": size[0],
+            "height": size[1],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        }
+        (gif_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+
+        return meta
+
+    except Exception as e:
+        # Cleanup on failure
+        import shutil
+        if gif_dir.exists():
+            shutil.rmtree(gif_dir)
+        logger.error(f"GIF upload failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/gifs")
+async def gifs_list():
+    """List all saved GIFs."""
+    return {"gifs": _load_gif_library()}
+
+
+@api_router.get("/gifs/{gif_id}/preview")
+async def gifs_preview(gif_id: str):
+    """Serve the original GIF file."""
+    source = GIFS_DIR / gif_id / "source.gif"
+    if not source.exists():
+        raise HTTPException(status_code=404, detail="GIF not found")
+    return FileResponse(path=source, media_type="image/gif")
+
+
+@api_router.post("/gifs/{gif_id}/play")
+async def gifs_play(gif_id: str):
+    """Play a GIF on the laser (loops until stopped)."""
+    frames_path = GIFS_DIR / gif_id / "frames.json"
+    meta_path = GIFS_DIR / gif_id / "meta.json"
+    if not frames_path.exists() or not meta_path.exists():
+        raise HTTPException(status_code=404, detail="GIF not found")
+
+    data = json.loads(frames_path.read_text())
+    meta = json.loads(meta_path.read_text())
+
+    # Convert back from JSON lists to tuples
+    frames = [[tuple(p) for p in f] for f in data["frames"]]
+    durations = data["durations_ms"]
+
+    await sdk_manager.play_gif(frames, durations, gif_name=meta.get("name", gif_id))
+    return {
+        "status": "playing",
+        "gif_id": gif_id,
+        "frame_count": len(frames),
+        "duration_ms": sum(durations),
+    }
+
+
+@api_router.post("/gifs/stop")
+async def gifs_stop():
+    """Stop GIF playback."""
+    await sdk_manager.stop_gif()
+    return {"status": "stopped"}
+
+
+@api_router.delete("/gifs/{gif_id}")
+async def gifs_delete(gif_id: str):
+    """Delete a saved GIF."""
+    import shutil
+    gif_dir = GIFS_DIR / gif_id
+    if not gif_dir.exists():
+        raise HTTPException(status_code=404, detail="GIF not found")
+
+    # Stop if currently playing this GIF
+    if sdk_manager.current_gif_name and sdk_manager.gif_active:
+        await sdk_manager.stop_gif()
+
+    shutil.rmtree(gif_dir)
+    return {"success": True}
+
+
+# ===== Library Endpoints =====
+
+@api_router.get("/library")
+async def library_list():
+    """List all saved songs (from meta.json files on disk)."""
+    items = []
+    for job_id, job in _active_jobs.items():
+        if job.get("status") != "complete":
+            continue
+        meta = job.get("metadata", {})
+        items.append({
+            "job_id": job_id,
+            "title": meta.get("title", "Unknown"),
+            "artist": meta.get("artist", "Unknown"),
+            "duration": meta.get("duration", 0),
+            "thumbnail_url": meta.get("thumbnail_url", ""),
+            "bpm": job.get("bpm", 0),
+            "total_frames": job.get("total_frames", 0),
+            "file_size_kb": job.get("file_size_kb", 0),
+            "ilda_filename": job.get("ilda_filename", ""),
+        })
+    # Sort newest first (by job_id which is uuid, so just reverse insertion order)
+    return {"songs": items}
+
+
+@api_router.delete("/library/{job_id}")
+async def library_delete(job_id: str):
+    """Delete a saved song (removes job dir and .ild + audio)."""
+    import shutil
+    job = _active_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Song not found")
+
+    job_dir = Path(job.get("job_dir", ""))
+    if job_dir.exists() and job_dir.is_relative_to(ROOT_DIR / "jobs"):
+        shutil.rmtree(job_dir)
+
+    _active_jobs.pop(job_id, None)
+    _stored_frames.pop(job_id, None)
+
+    return {"success": True}
+
+
 # ===== SDK Streaming Endpoints =====
 
 class StreamRequest(BaseModel):
@@ -729,64 +960,159 @@ class StreamRequest(BaseModel):
 
 @api_router.post("/stream/start")
 async def stream_start(request: StreamRequest):
-    """Start streaming frames to BEYOND SDK with audio playback."""
-    global _sdk_streamer
-
+    """Start streaming frames to BEYOND SDK with audio playback.
+    Routes through the shared sdk_manager so we don't double-load the DLL."""
     job = _active_jobs.get(request.job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # If frames are not in memory (server restarted), load them from disk
     frames = _stored_frames.get(request.job_id)
     if not frames:
-        raise HTTPException(status_code=404, detail="Frames not in memory — regenerate the show")
+        loop = asyncio.get_event_loop()
+        # Video jobs persist as pickle; song jobs as .ild
+        frames_pkl = Path(job.get('frames_path', ''))
+        ilda_path = Path(job.get('ilda_path', ''))
+        if frames_pkl.exists():
+            import pickle
+            logger.info(f"Loading frames from {frames_pkl}")
+            def _load_pkl():
+                with open(frames_pkl, "rb") as f:
+                    return pickle.load(f)
+            frames = await loop.run_in_executor(None, _load_pkl)
+        elif ilda_path.exists():
+            from services.ilda_reader import read_ilda_file
+            logger.info(f"Loading frames from {ilda_path}")
+            frames = await loop.run_in_executor(None, read_ilda_file, ilda_path)
+        else:
+            raise HTTPException(status_code=404, detail="No frames or .ild file found")
+        _stored_frames[request.job_id] = frames
 
     audio_path = Path(job['job_dir']) / "audio.wav"
     if not audio_path.exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
 
-    # Stop any existing stream
-    if _sdk_streamer and _sdk_streamer.playing:
-        _sdk_streamer.stop()
-
-    from services.sdk_streamer import SdkStreamer
-    _sdk_streamer = SdkStreamer()
-
-    if not _sdk_streamer.load(frames, audio_path):
-        raise HTTPException(status_code=500, detail=_sdk_streamer.error or "Failed to load")
-
-    if not _sdk_streamer.start():
-        raise HTTPException(status_code=500, detail=_sdk_streamer.error or "Failed to start SDK stream")
+    song_name = job.get("song_title") or job.get("title") or request.job_id
+    ok = await sdk_manager.play_song(frames, audio_path, song_name=song_name)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to start SDK song playback")
 
     return {
         "status": "streaming",
         "message": "BEYOND SDK playback started",
         "total_frames": len(frames),
-        "total_duration_ms": _sdk_streamer.total_duration_ms,
+        "total_duration_ms": sdk_manager.song_total_ms,
     }
 
 
 @api_router.post("/stream/stop")
 async def stream_stop():
     """Stop BEYOND SDK streaming."""
-    global _sdk_streamer
-    if _sdk_streamer:
-        _sdk_streamer.stop()
-        return {"status": "stopped"}
-    return {"status": "no_stream"}
+    await sdk_manager.stop_song()
+    return {"status": "stopped"}
 
 
 @api_router.get("/stream/status")
 async def stream_status():
     """Get current SDK streaming status."""
-    if _sdk_streamer:
-        return _sdk_streamer.get_status()
     return {
-        "playing": False,
-        "current_time_ms": 0,
-        "total_duration_ms": 0,
-        "frames_sent": 0,
-        "sdk": {"connected": False},
-        "error": None,
+        "playing": sdk_manager.song_active,
+        "current_time_ms": (sdk_manager._song_audio_position / sdk_manager._song_audio_sr * 1000.0) if sdk_manager._song_audio_sr else 0,
+        "total_duration_ms": sdk_manager.song_total_ms,
+        "frames_sent": sdk_manager.song_frames_sent,
+        "sdk": {"connected": sdk_manager._ready, "simulation": sdk_manager.simulation_mode},
+        "error": sdk_manager.last_error,
+    }
+
+
+# ===== Video → Laser =====
+
+class VideoStreamRequest(BaseModel):
+    url: str
+    duration_s: float = 45.0
+    max_points: int = 800
+    k_colors: int = 5
+
+
+@api_router.post("/video/stream")
+async def video_stream(request: VideoStreamRequest):
+    """Download a YouTube video, vectorize the first N seconds with color,
+    and play it on the laser synced to the original audio.
+
+    Persists frames + audio to disk so the job shows up in the Library and
+    can be replayed later without re-downloading or re-vectorizing."""
+    from services.video_processor import download_video_with_audio, vectorize_video
+    import pickle
+
+    job_id = f"video_{uuid.uuid4().hex[:8]}"
+    out_dir = JOBS_DIR / job_id
+
+    loop = asyncio.get_event_loop()
+
+    def _download_and_vectorize():
+        video_path, audio_path, info = download_video_with_audio(
+            request.url, out_dir, duration_s=request.duration_s
+        )
+        frames = vectorize_video(
+            video_path, max_points=request.max_points, k_colors=request.k_colors
+        )
+        return frames, audio_path, video_path, info
+
+    try:
+        frames, audio_path, video_path, yt_info = await loop.run_in_executor(
+            None, _download_and_vectorize
+        )
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
+        raise HTTPException(status_code=500, detail=f"ffmpeg failed: {stderr[-400:]}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Video processing failed: {e}")
+
+    if not frames:
+        raise HTTPException(status_code=500, detail="No frames vectorized from video")
+
+    # Persist the vectorized frames + metadata for future replay
+    def _persist():
+        frames_pkl = out_dir / "frames.pkl"
+        with open(frames_pkl, "wb") as f:
+            pickle.dump(frames, f, protocol=pickle.HIGHEST_PROTOCOL)
+        meta = {
+            "job_id": job_id,
+            "source": "video",
+            "source_url": request.url,
+            "status": "complete",
+            "job_dir": str(out_dir),
+            "audio_path": str(audio_path),
+            "video_path": str(video_path),
+            "frames_path": str(frames_pkl),
+            "total_frames": len(frames),
+            "duration_ms": frames[-1].timestamp_ms if frames else 0,
+            "max_points": request.max_points,
+            "metadata": {
+                "title": (yt_info or {}).get("title", job_id),
+                "artist": (yt_info or {}).get("uploader", ""),
+                "duration": int((yt_info or {}).get("duration") or ((frames[-1].timestamp_ms if frames else 0) / 1000)),
+                "thumbnail_url": (yt_info or {}).get("thumbnail", ""),
+            },
+        }
+        (out_dir / "meta.json").write_text(json.dumps(meta, indent=2))
+        return meta
+
+    meta = await loop.run_in_executor(None, _persist)
+    _active_jobs[job_id] = meta
+    _stored_frames[job_id] = frames
+
+    ok = await sdk_manager.play_song(frames, audio_path, song_name=job_id)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to start SDK playback")
+
+    return {
+        "status": "streaming",
+        "job_id": job_id,
+        "frames": len(frames),
+        "total_duration_ms": sdk_manager.song_total_ms,
+        "video_path": str(video_path),
+        "audio_path": str(audio_path),
     }
 
 
