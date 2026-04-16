@@ -16,7 +16,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # Backend URL from frontend .env
-BACKEND_URL = "https://pangolin-ai-builder.preview.emergentagent.com/api"
+BACKEND_URL = "https://youtube-to-laser.preview.emergentagent.com/api"
 
 class BeyondAPITester:
     def __init__(self, base_url: str):
