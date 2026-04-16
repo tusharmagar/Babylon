@@ -1,0 +1,87 @@
+{
+  "theme": "dark",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "rationale": "Lighting consoles demand a deep dark mode to prevent light bleed in theater environments, high legibility, and unmistakable interaction states. Archetype 4's brutalist function-first approach ensures operators hit the right cues instantly without visual clutter.",
+  "color_palette": {
+    "background": "#0A0A0A",
+    "surface": "#121212",
+    "surface_glass": "rgba(18, 18, 18, 0.7)",
+    "border": "rgba(255, 255, 255, 0.1)",
+    "border_active": "rgba(255, 255, 255, 0.3)",
+    "text_primary": "#FFFFFF",
+    "text_secondary": "#A1A1AA",
+    "text_muted": "#71717A",
+    "accents": {
+      "trigger_ready": "#3F3F46",
+      "trigger_active": "#22C55E",
+      "stop_all": "#EF4444",
+      "blackout": "#F59E0B",
+      "connection_online": "#22C55E",
+      "connection_offline": "#EF4444"
+    }
+  },
+  "typography": {
+    "fonts": {
+      "heading": "Chivo, sans-serif",
+      "body": "IBM Plex Sans, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "scales": {
+      "h1": "text-3xl sm:text-4xl lg:text-5xl tracking-tight font-black",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl tracking-tight font-semibold",
+      "body": "text-sm md:text-base leading-relaxed",
+      "mono_small": "text-xs tracking-wider"
+    }
+  },
+  "layout_and_spacing": {
+    "strategy": "The Control Room Grid",
+    "padding_scale": "p-4, p-6, p-8",
+    "grid_structure": "grid-cols-1 lg:grid-cols-12 gap-6",
+    "sections": {
+      "cue_grid": "col-span-1 lg:col-span-8 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3",
+      "controls_panel": "col-span-1 lg:col-span-4 flex flex-col gap-6"
+    }
+  },
+  "surfaces_and_micro_themes": {
+    "header": "Crystal Glass variant: bg-black/60 backdrop-blur-xl border-b border-white/10 z-50 sticky top-0",
+    "cards": "Grid Borders look: flat surface (#121212), 1px solid border-white/10, no shadow. Active elements get a brighter border.",
+    "buttons": "Tactile switch aesthetic. Base state is dark grey with a 1px border. Active state has full color background (Green/Red) and glowing drop shadow.",
+    "log_panel": "Retro-Futurism Terminal Look: Deep black background, border-white/10, tiny monospace green text, scanline texture if possible."
+  },
+  "components_instructions": {
+    "general": "Use pure HTML/Tailwind for the grid layout. Use Shadcn components for dialogs, forms, and inputs.",
+    "cue_buttons": "Large touch targets (h-24), display cue number prominently. State: Idle (border-white/10 text-white/70), Active/Hover (border-green-500 text-green-400 bg-green-500/10).",
+    "stop_all_button": "Massive target (h-16), bright red background hover:bg-red-600 text-white font-bold.",
+    "blackout_toggle": "Large target (h-16), amber/warning styling.",
+    "settings_modal": "Shadcn Dialog. Form includes input for ngrok URL and port.",
+    "connection_indicator": "Small pulsing dot next to header title. Green if connected, Red if offline.",
+    "command_logs": "Fixed height scrollable area (h-64 flex-grow), auto-scroll to bottom, retro terminal style."
+  },
+  "motion_and_interaction": {
+    "hover_states": "Hard crisp changes. Buttons light up their borders or backgrounds instantly. No slow fades (this is hardware control).",
+    "active_states": "Slight scale down (scale-95) to simulate a physical hardware button press.",
+    "animations": "Keep minimal. A pulsing dot for connection status. Smooth slide-in for the settings dialog."
+  },
+  "media_and_assets": {
+    "icons": "lucide-react (Settings, Activity, Square, Power, AlertTriangle, Terminal)",
+    "image_urls": [
+      {
+        "category": "background_texture",
+        "url": "https://images.unsplash.com/photo-1760978632014-f799595497af?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2MTJ8MHwxfHNlYXJjaHwyfHxkYXJrJTIwdGVjaCUyMGdyaWQlMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3NjMyMzA4MHww&ixlib=rb-4.1.0&q=85",
+        "description": "Wavy metallic surface with small dots. Use as a very low opacity (5%) fixed background to give the dashboard a tactile hardware feel.",
+        "usage": "Global background texture overlaid behind the main app container."
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Install required fonts: Chivo, IBM Plex Sans, JetBrains Mono via Google Fonts.",
+    "Setup Tailwind config with the specified color palette and extend theme.",
+    "Ensure all buttons, inputs, and toggles have `data-testid` attributes (e.g., `data-testid=\"cue-btn-1\"`, `data-testid=\"stop-all-btn\"`).",
+    "Build a robust layout: A sticky top header (branding, connection status, settings trigger). Main content area split into Cue Grid (left) and Master Controls + Logs (right).",
+    "Implement the Command Log panel as an auto-scrolling `div` with a retro terminal look.",
+    "Use Shadcn Dialog for the Settings page, capturing 'host' and 'port' state. Do not use generic browser prompts.",
+    "Respect the 'Control Room Grid' spacing rule: use tight gaps (`gap-3` or `gap-4`) for the cue buttons so they look like a physical MIDI controller bank.",
+    "The app has .js files. DO NOT USE TypeScript (.tsx/ts). Provide guidelines explicitly for React Javascript."
+  ]
+}
