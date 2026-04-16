@@ -43,12 +43,22 @@ def extract_audio(youtube_url: str, job_dir: Path) -> dict:
     # Clean artist name - remove " - Topic" suffix from YouTube auto-generated channels
     if artist.endswith(' - Topic'):
         artist = artist[:-8]
-    
-    # Try to parse title for artist - title format
-    if ' - ' in title and artist in ('Unknown Artist', ''):
+
+    # Try to parse title for artist - title format (e.g. "Kim Petras - Coconuts")
+    if ' - ' in title:
         parts = title.split(' - ', 1)
-        artist = parts[0].strip()
+        # If artist is unknown, extract from title
+        if artist in ('Unknown Artist', ''):
+            artist = parts[0].strip()
         title = parts[1].strip()
+
+    # Remove common YouTube junk from title
+    import re
+    title = re.sub(r'\s*\((?:Official\s+)?(?:Lyric\s+)?(?:Music\s+)?Video\)', '', title, flags=re.IGNORECASE)
+    title = re.sub(r'\s*\[(?:Official\s+)?(?:Lyric\s+)?(?:Music\s+)?Video\]', '', title, flags=re.IGNORECASE)
+    title = re.sub(r'\s*\(Official Audio\)', '', title, flags=re.IGNORECASE)
+    title = re.sub(r'\s*\(Audio\)', '', title, flags=re.IGNORECASE)
+    title = title.strip()
     
     logger.info(f"Extracted: '{title}' by '{artist}' ({duration}s)")
     

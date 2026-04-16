@@ -537,8 +537,12 @@ async def send_chat_message(request: ChatMessageRequest):
 
 # Job storage for tracking active pipeline jobs
 _active_jobs: Dict[str, dict] = {}
+_stored_frames: Dict[str, list] = {}  # job_id -> list of LaserFrame (for SDK streaming)
 JOBS_DIR = ROOT_DIR / "jobs"
 JOBS_DIR.mkdir(exist_ok=True)
+
+# SDK Streamer (single active instance)
+_sdk_streamer = None
 
 
 @api_router.post("/youtube/analyze")
@@ -578,9 +582,7 @@ async def youtube_analyze(request: YouTubeAnalyzeRequest):
             yield {"event": "progress", "data": send_event("fetching_lyrics")}
             
             from services.lyrics import fetch_lyrics
-            lyrics = await asyncio.get_event_loop().run_in_executor(
-                None, fetch_lyrics, metadata['title'], metadata['artist'], metadata['duration']
-            )
+            lyrics = await fetch_lyrics(metadata['title'], metadata['artist'], metadata['duration'])
             
             yield {"event": "progress", "data": send_event("fetching_lyrics_done", {
                 "lyric_count": len(lyrics),
@@ -618,20 +620,25 @@ async def youtube_analyze(request: YouTubeAnalyzeRequest):
             
             from services.laser_generator import generate_show
             from services.point_optimizer import optimize_frame
-            
+
+            def generate_and_optimize(lyrics, design, analysis):
+                frames = generate_show(lyrics, design, analysis)
+                for frame in frames:
+                    frame.points = optimize_frame(frame.points)
+                return frames
+
             frames = await asyncio.get_event_loop().run_in_executor(
-                None, generate_show, lyrics, design, analysis
+                None, generate_and_optimize, lyrics, design, analysis
             )
             
-            # Optimize each frame
-            for frame in frames:
-                frame.points = optimize_frame(frame.points)
-            
+            # Store frames in memory for SDK streaming
+            _stored_frames[job_id] = frames
+
             yield {"event": "progress", "data": send_event("generating_frames_done", {
                 "total_frames": len(frames),
                 "duration_s": analysis['duration_s'],
             })}
-            
+
             # Stage 6: Write ILDA file
             yield {"event": "progress", "data": send_event("writing_ilda")}
             
@@ -651,6 +658,7 @@ async def youtube_analyze(request: YouTubeAnalyzeRequest):
             # Store job info for download
             _active_jobs[job_id] = {
                 "status": "complete",
+                "job_id": job_id,
                 "job_dir": str(job_dir),
                 "ilda_path": str(ilda_path),
                 "ilda_filename": ilda_filename,
@@ -711,6 +719,75 @@ async def youtube_job_status(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+# ===== SDK Streaming Endpoints =====
+
+class StreamRequest(BaseModel):
+    job_id: str
+
+
+@api_router.post("/stream/start")
+async def stream_start(request: StreamRequest):
+    """Start streaming frames to BEYOND SDK with audio playback."""
+    global _sdk_streamer
+
+    job = _active_jobs.get(request.job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    frames = _stored_frames.get(request.job_id)
+    if not frames:
+        raise HTTPException(status_code=404, detail="Frames not in memory — regenerate the show")
+
+    audio_path = Path(job['job_dir']) / "audio.wav"
+    if not audio_path.exists():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    # Stop any existing stream
+    if _sdk_streamer and _sdk_streamer.playing:
+        _sdk_streamer.stop()
+
+    from services.sdk_streamer import SdkStreamer
+    _sdk_streamer = SdkStreamer()
+
+    if not _sdk_streamer.load(frames, audio_path):
+        raise HTTPException(status_code=500, detail=_sdk_streamer.error or "Failed to load")
+
+    if not _sdk_streamer.start():
+        raise HTTPException(status_code=500, detail=_sdk_streamer.error or "Failed to start SDK stream")
+
+    return {
+        "status": "streaming",
+        "message": "BEYOND SDK playback started",
+        "total_frames": len(frames),
+        "total_duration_ms": _sdk_streamer.total_duration_ms,
+    }
+
+
+@api_router.post("/stream/stop")
+async def stream_stop():
+    """Stop BEYOND SDK streaming."""
+    global _sdk_streamer
+    if _sdk_streamer:
+        _sdk_streamer.stop()
+        return {"status": "stopped"}
+    return {"status": "no_stream"}
+
+
+@api_router.get("/stream/status")
+async def stream_status():
+    """Get current SDK streaming status."""
+    if _sdk_streamer:
+        return _sdk_streamer.get_status()
+    return {
+        "playing": False,
+        "current_time_ms": 0,
+        "total_duration_ms": 0,
+        "frames_sent": 0,
+        "sdk": {"connected": False},
+        "error": None,
+    }
 
 
 # ===== Wire Up =====

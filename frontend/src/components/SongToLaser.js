@@ -86,14 +86,14 @@ const StageIndicator = ({ stage, currentStage, completedStages, stageData }) => 
 
 const ResultCard = ({ result }) => {
   const [downloading, setDownloading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
+  const [streamPlaying, setStreamPlaying] = useState(false);
   const meta = result.metadata || {};
   const design = result.design || {};
 
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const response = await fetch(`${API}/youtube/download/${result.job_id || result.status === 'complete' ? '' : ''}`.replace(/\/$/, ''));
-      // Use the proper download URL
       const url = `${API}/youtube/download/${result.job_id}`;
       const a = document.createElement("a");
       a.href = url;
@@ -106,6 +106,42 @@ const ResultCard = ({ result }) => {
       toast.error("Download failed");
     } finally {
       setDownloading(false);
+    }
+  };
+
+  const handleStreamToLaser = async () => {
+    if (streamPlaying) {
+      // Stop
+      setStreaming(true);
+      try {
+        await fetch(`${API}/stream/stop`, { method: "POST" });
+        setStreamPlaying(false);
+        toast.success("Stream stopped");
+      } catch (e) {
+        toast.error("Failed to stop stream");
+      } finally {
+        setStreaming(false);
+      }
+    } else {
+      // Start
+      setStreaming(true);
+      try {
+        const resp = await fetch(`${API}/stream/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ job_id: result.job_id }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json();
+          throw new Error(err.detail || "Failed to start stream");
+        }
+        setStreamPlaying(true);
+        toast.success("Streaming to laser with audio!");
+      } catch (e) {
+        toast.error(e.message || "Failed to stream");
+      } finally {
+        setStreaming(false);
+      }
     }
   };
 
@@ -205,19 +241,37 @@ const ResultCard = ({ result }) => {
         </div>
       )}
 
-      {/* Download button */}
-      <Button
-        onClick={handleDownload}
-        disabled={downloading}
-        className="w-full bg-green-600 hover:bg-green-700 text-white font-semibold h-12 text-base"
-      >
-        {downloading ? (
-          <Loader2 className="w-5 h-5 animate-spin mr-2" />
-        ) : (
-          <Download className="w-5 h-5 mr-2" />
-        )}
-        {downloading ? "Downloading..." : `Download ${result.ilda_filename || "show.ild"}`}
-      </Button>
+      {/* Action buttons */}
+      <div className="flex gap-3">
+        <Button
+          onClick={handleStreamToLaser}
+          disabled={streaming}
+          className={`flex-1 font-semibold h-12 text-base ${
+            streamPlaying
+              ? "bg-red-600 hover:bg-red-700 text-white"
+              : "bg-green-600 hover:bg-green-700 text-white"
+          }`}
+        >
+          {streaming ? (
+            <Loader2 className="w-5 h-5 animate-spin mr-2" />
+          ) : (
+            <Zap className="w-5 h-5 mr-2" />
+          )}
+          {streaming ? "..." : streamPlaying ? "Stop Laser" : "Stream to Laser"}
+        </Button>
+        <Button
+          onClick={handleDownload}
+          disabled={downloading}
+          variant="outline"
+          className="h-12 px-6 border-white/10 text-zinc-300 hover:text-white hover:bg-white/10"
+        >
+          {downloading ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <Download className="w-5 h-5" />
+          )}
+        </Button>
+      </div>
     </div>
   );
 };
@@ -286,15 +340,18 @@ const SongToLaser = () => {
             try {
               const data = JSON.parse(dataStr);
 
+              // Handle complete event
+              if (data.status === "complete") {
+                setResult(data);
+                setProcessing(false);
+                toast.success("Laser show generated successfully!");
+                return;
+              }
+
               if (data.stage) {
                 if (data.stage.endsWith("_done")) {
                   setCompletedStages(prev => [...prev, data.stage]);
                   setStageData(prev => ({ ...prev, [data.stage]: data }));
-                  // Advance current stage to next
-                  const doneIdx = PIPELINE_STAGES.findIndex(s => s.doneKey === data.stage);
-                  if (doneIdx >= 0 && doneIdx + 1 < PIPELINE_STAGES.length) {
-                    // Don't advance yet — will be set by next "active" event
-                  }
                 } else if (data.stage === "error") {
                   setError(data.error || "Pipeline failed");
                   setProcessing(false);
