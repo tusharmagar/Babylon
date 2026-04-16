@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import "@/App.css";
 import axios from "axios";
 import { Settings, Power, Square, AlertTriangle, Terminal, Wifi, WifiOff, Trash2 } from "lucide-react";
@@ -179,15 +179,6 @@ function App() {
   const [blackoutActive, setBlackoutActive] = useState(false);
   const [activeCue, setActiveCue] = useState(null);
   const logsEndRef = useRef(null);
-
-  // Scroll logs to bottom
-  const scrollLogsToBottom = useCallback(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, []);
-
-  useEffect(() => {
-    scrollLogsToBottom();
-  }, [logs, scrollLogsToBottom]);
 
   // Fetch initial status and config
   useEffect(() => {
