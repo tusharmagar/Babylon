@@ -26,6 +26,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Suppress noisy polling logs from uvicorn — only log non-GET or non-200 requests
+class PollFilter(logging.Filter):
+    """Filter out repetitive polling GET requests (status, logs, laser/status)."""
+    POLL_PATHS = {"/api/status", "/api/logs", "/api/laser/status"}
+    def filter(self, record):
+        msg = record.getMessage()
+        if "GET" in msg and "200" in msg:
+            for path in self.POLL_PATHS:
+                if path in msg:
+                    return False
+        return True
+
+logging.getLogger("uvicorn.access").addFilter(PollFilter())
+
 
 # ===== TCP Connection Manager for PangoScript (Cues) =====
 class BeyondConnectionManager:
@@ -71,7 +85,9 @@ class BeyondConnectionManager:
                 self.port = port
                 self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self.socket.settimeout(timeout)
-                self.socket.connect((host, port))
+                # Run blocking connect in thread to avoid freezing the event loop
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self.socket.connect, (host, port))
                 self.connected = True
                 self.add_log("CONNECTION", f"Connected to {host}:{port}")
                 await self._send_raw_internal(f"SetEchoMode {self.echo_mode}")
@@ -189,6 +205,7 @@ async def lifespan(app: FastAPI):
     # Startup
     db.init_db()
     sdk_manager.initialize()
+    sdk_manager.start_send_loop()
     logger.info("Server started — DB initialized, SDK manager running")
     yield
     # Shutdown
@@ -205,6 +222,64 @@ api_router = APIRouter(prefix="/api")
 @api_router.get("/")
 async def root():
     return {"message": "BEYOND Control API — SDK + PangoScript"}
+
+
+@api_router.get("/health")
+async def health():
+    """Debug endpoint — check what's working."""
+    return {
+        "ai_agent": ai_agent is not None,
+        "openai_key_set": bool(os.environ.get("OPENAI_API_KEY")),
+        "openai_key_prefix": (os.environ.get("OPENAI_API_KEY") or "")[:12] + "...",
+        "sdk_initialized": sdk_manager.initialized,
+        "sdk_simulation": sdk_manager.simulation_mode,
+    }
+
+
+@api_router.get("/test-circle")
+async def test_circle():
+    """Send a green circle directly using the SDK — bypasses background thread."""
+    import ctypes, math
+    from sdk_manager import SdkPoint
+
+    if not sdk_manager._dll or not sdk_manager._ready:
+        return {"error": "SDK not ready"}
+
+    NUM = 64
+    RADIUS = 15000.0
+    GREEN = 0 | (255 << 8) | (0 << 16)
+
+    arr = (SdkPoint * NUM)()
+    for i in range(NUM):
+        angle = 2 * math.pi * i / NUM
+        arr[i].x = RADIUS * math.cos(angle)
+        arr[i].y = RADIUS * math.sin(angle)
+        arr[i].z = 0.0
+        arr[i].color = GREEN
+        arr[i].rep_count = 0
+        arr[i].focus = 0
+        arr[i].status = 0
+        arr[i].zero = 0
+
+    # Send 150 frames (~5 seconds) directly from this thread
+    results = []
+    import time
+    for f in range(150):
+        r = sdk_manager._dll.ldbSendFrameToImage(
+            sdk_manager._image_name, NUM,
+            ctypes.byref(arr), ctypes.byref(sdk_manager._zone_arr),
+            -30000,
+        )
+        if f < 5:
+            results.append(r)
+        time.sleep(1/30)
+
+    return {
+        "frames_sent": 150,
+        "first_5_results": results,
+        "image_name": sdk_manager._image_name.decode(),
+        "point0": f"({arr[0].x:.0f},{arr[0].y:.0f},c={arr[0].color})",
+    }
 
 
 # ===== PangoScript TCP Endpoints (Cues Page) =====
@@ -336,7 +411,12 @@ async def laser_send(request: LaserSendRequest):
     if not sdk_manager.initialized:
         raise HTTPException(status_code=503, detail="SDK not initialized")
 
-    sdk_manager.set_points(request.point_data, request.pattern_name)
+    logger.info(f"LASER SEND: {len(request.point_data)} points, pattern={request.pattern_name!r}")
+    if request.point_data:
+        sample = request.point_data[:3]
+        logger.info(f"LASER SEND: First 3 points: {sample}")
+
+    await sdk_manager.set_points(request.point_data, request.pattern_name)
     return {
         "success": True,
         "point_count": len(request.point_data),
@@ -355,7 +435,7 @@ async def laser_blackout():
 @api_router.post("/laser/stop")
 async def laser_stop():
     """Stop streaming (clear points, keep loop running)."""
-    sdk_manager.set_points([], "")
+    await sdk_manager.set_points([], "")
     return {"success": True, "message": "Streaming stopped"}
 
 
@@ -392,8 +472,11 @@ async def delete_chat_session(session_id: str):
 @api_router.post("/chat/send")
 async def send_chat_message(request: ChatMessageRequest):
     """Send a message to the AI agent and get a laser pattern response."""
+    logger.info(f"CHAT: Received message: {request.message[:80]!r}")
+
     if not ai_agent:
-        raise HTTPException(status_code=503, detail="AI Agent not available. Check EMERGENT_LLM_KEY.")
+        logger.error("CHAT: AI Agent is None — OPENAI_API_KEY missing or init failed")
+        raise HTTPException(status_code=503, detail="AI Agent not available. Check OPENAI_API_KEY.")
 
     session_id = request.session_id
 
@@ -415,11 +498,13 @@ async def send_chat_message(request: ChatMessageRequest):
     history = db.get_recent_history(session_id, limit=10)
 
     # Generate AI response
+    logger.info("CHAT: Calling OpenAI...")
     ai_response = await ai_agent.generate_pattern(
         user_message=request.message,
         session_id=session_id,
         history=history[:-1]  # Exclude the message we just added
     )
+    logger.info(f"CHAT: Got response — pattern={ai_response.get('pattern_name')!r}, points={len(ai_response.get('point_data', []))}")
 
     # Save AI response
     msg_id = db.add_message(

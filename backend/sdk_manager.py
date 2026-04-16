@@ -1,242 +1,244 @@
 """
-BEYOND SDK Manager — Loads BEYONDIOx64.dll via ctypes, manages a continuous 30fps
-send loop on a background thread. The AI just swaps the point list and the laser
-output updates instantly on the next frame.
+BEYOND SDK Manager — uses asyncio event loop for frame sending (not threads).
 
-One zone image ("AgentOutput") is created at startup and reused for the entire session.
+The DLL returns result=2 from daemon threads but result=1 from the main thread.
+So we send frames via an asyncio task on the main event loop, matching the
+approach that works in babylon-laser and our test-circle endpoint.
 """
 
+import asyncio
 import ctypes
-import threading
 import time
+import socket
 import logging
 import os
 
 logger = logging.getLogger(__name__)
 
-# ===== Point Structure (16 bytes) =====
+
 class SdkPoint(ctypes.Structure):
+    """16-byte point struct matching the SDK exactly."""
     _fields_ = [
-        ('x', ctypes.c_float),       # -32768 to +32767
-        ('y', ctypes.c_float),       # -32768 to +32767
-        ('z', ctypes.c_float),       # Usually 0
-        ('color', ctypes.c_uint32),  # R | (G<<8) | (B<<16), 0 = blanked
-        ('rep_count', ctypes.c_uint8),  # Corner dwell (0=normal, 2-3=sharp)
-        ('focus', ctypes.c_uint8),   # Reserved, always 0
-        ('status', ctypes.c_uint8),  # Reserved, always 0
-        ('zero', ctypes.c_uint8),    # Must be 0
+        ('x', ctypes.c_float),
+        ('y', ctypes.c_float),
+        ('z', ctypes.c_float),
+        ('color', ctypes.c_uint32),
+        ('rep_count', ctypes.c_uint8),
+        ('focus', ctypes.c_uint8),
+        ('status', ctypes.c_uint8),
+        ('zero', ctypes.c_uint8),
     ]
 
 
-# Default DLL path — hardcoded for hackathon
 DLL_PATH = r"C:\Program Files\MadMapper 5.7.1\BEYONDIOx64.dll"
 IMAGE_NAME = b"AgentOutput"
-SCAN_RATE = -30000  # Negative = absolute Hz (30,000 pps)
+SCAN_RATE = -30000
 TARGET_FPS = 30
+
+
+def _clear_cues_sync():
+    """Stop all existing cues via PangoScript TCP (blocking — run in executor)."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.0)
+        sock.connect(("localhost", 16063))
+        sock.sendall(b"StopAllNow\r\n")
+        try:
+            resp = sock.recv(1024).decode("ascii", errors="replace").strip()
+            logger.info(f"SDK: PangoScript StopAllNow -> {resp}")
+        except socket.timeout:
+            pass
+        sock.close()
+    except Exception as e:
+        logger.warning(f"SDK: PangoScript clear skipped: {e}")
+
+
+async def clear_cues_via_pangoscript():
+    """Non-blocking wrapper — runs the socket call in a thread executor."""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _clear_cues_sync)
 
 
 class BeyondSDKManager:
     """
-    Manages the BEYOND SDK DLL lifecycle and a continuous frame-sending loop.
-
-    Usage:
-        manager = BeyondSDKManager()
-        manager.initialize()       # Load DLL, wait for BEYOND, create zone image
-        manager.set_points([...])  # Swap point data (instant on next frame)
-        manager.blackout()         # Clear laser
-        manager.shutdown()         # Clean up
+    Manages BEYOND SDK with asyncio-based frame sending.
+    All DLL calls happen on the main event loop thread.
     """
 
     def __init__(self):
-        self.dll = None
+        self._dll = None
+        self._image_name = None
+        self._ready = False
+        self._zone_arr = (ctypes.c_ubyte * 256)()
+        self._zone_arr[0] = 1
+
         self.initialized = False
-        self.simulation_mode = False  # True when DLL not available
+        self.simulation_mode = False
         self.current_points = []
         self.current_pattern_name = ""
-        self.lock = threading.Lock()
         self.running = False
-        self.thread = None
+        self._task = None
         self.frames_sent = 0
         self.last_error = None
 
     def initialize(self):
-        """Load DLL, initialize, wait for BEYOND, create zone image, start send loop."""
+        """Connect to SDK and create image. Call start_send_loop() after event loop is running."""
         try:
             if not os.path.exists(DLL_PATH):
-                logger.warning(f"BEYOND DLL not found at {DLL_PATH} — running in simulation mode")
+                logger.warning(f"SDK: DLL not found at {DLL_PATH} — simulation mode")
                 self.simulation_mode = True
                 self.initialized = True
-                self._start_send_loop()
                 return True
 
-            self.dll = ctypes.CDLL(DLL_PATH)
+            self._dll = ctypes.CDLL(DLL_PATH)
 
-            # Set up function signatures
-            self.dll.ldbCreate.restype = ctypes.c_int
-            self.dll.ldbBeyondExeReady.restype = ctypes.c_int
-            self.dll.ldbBeyondExeStarted.restype = ctypes.c_int
-            self.dll.ldbCreateZoneImage.argtypes = [ctypes.c_int, ctypes.c_char_p]
-            self.dll.ldbCreateZoneImage.restype = ctypes.c_int
-            self.dll.ldbDeleteZoneImage.argtypes = [ctypes.c_char_p]
-            self.dll.ldbSendFrameToImage.argtypes = [
-                ctypes.c_char_p,
-                ctypes.c_int,
-                ctypes.c_void_p,
-                ctypes.c_void_p,
-                ctypes.c_int,
+            # Function signatures (matches babylon-laser)
+            self._dll.ldbCreateZoneImage.argtypes = [ctypes.c_int, ctypes.c_char_p]
+            self._dll.ldbCreateZoneImage.restype = ctypes.c_int
+            self._dll.ldbDeleteZoneImage.argtypes = [ctypes.c_char_p]
+            self._dll.ldbSendFrameToImage.argtypes = [
+                ctypes.c_char_p, ctypes.c_int,
+                ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int,
             ]
-            self.dll.ldbSendFrameToImage.restype = ctypes.c_int
-            self.dll.ldbEnableLaserOutput.restype = ctypes.c_int
-            self.dll.ldbBlackout.restype = ctypes.c_int
-            self.dll.ldbDestroy.restype = ctypes.c_int
+            self._dll.ldbSendFrameToImage.restype = ctypes.c_int
+            self._dll.ldbEnableLaserOutput.restype = ctypes.c_int
+            self._dll.ldbBlackout.restype = ctypes.c_int
+            self._dll.ldbDestroy.restype = ctypes.c_int
+            self._dll.ldbGetProjectorCount.restype = ctypes.c_int
+            self._dll.ldbGetZoneCount.restype = ctypes.c_int
 
-            # Step 1: Initialize DLL
-            self.dll.ldbCreate()
-            logger.info("SDK: ldbCreate() called")
+            self._dll.ldbCreate()
 
-            # Step 2: Wait for BEYOND to be ready (timeout after 10s)
-            timeout = 10
-            start = time.time()
-            while not self.dll.ldbBeyondExeReady():
-                if time.time() - start > timeout:
-                    logger.error("SDK: BEYOND not ready after 10s timeout")
-                    self.last_error = "BEYOND not ready — is it running?"
-                    self.simulation_mode = True
-                    self.initialized = True
-                    self._start_send_loop()
-                    return True
-                time.sleep(0.5)
+            for _ in range(50):
+                if self._dll.ldbBeyondExeReady():
+                    break
+                time.sleep(0.1)
 
-            logger.info("SDK: BEYOND is ready")
+            if not self._dll.ldbBeyondExeReady():
+                logger.error("SDK: BEYOND not ready — simulation mode")
+                self.last_error = "BEYOND not ready — is it running?"
+                self.simulation_mode = True
+                self.initialized = True
+                return True
 
-            # Step 3: Create one zone image for the whole session
-            result = self.dll.ldbCreateZoneImage(0, IMAGE_NAME)
-            logger.info(f"SDK: ldbCreateZoneImage → {result}")
+            self._ready = True
+            projectors = self._dll.ldbGetProjectorCount()
+            zones = self._dll.ldbGetZoneCount()
+            logger.info(f"SDK: Connected! projectors={projectors} zones={zones}")
 
-            # Step 4: Enable laser output
-            self.dll.ldbEnableLaserOutput()
-            logger.info("SDK: Laser output enabled")
+            self._image_name = IMAGE_NAME
+            result = self._dll.ldbCreateZoneImage(0, self._image_name)
+            self._dll.ldbEnableLaserOutput()
+            logger.info(f"SDK: CreateZoneImage={result}, laser output enabled")
 
             self.initialized = True
             self.simulation_mode = False
-
-            # Step 5: Start continuous send loop
-            self._start_send_loop()
-
-            logger.info("SDK: Fully initialized, send loop running at 30fps")
             return True
 
         except OSError as e:
             logger.warning(f"SDK: Could not load DLL ({e}) — simulation mode")
             self.simulation_mode = True
             self.initialized = True
-            self._start_send_loop()
             return True
         except Exception as e:
-            logger.error(f"SDK: Initialization failed: {e}")
+            logger.error(f"SDK: Init failed: {e}")
             self.last_error = str(e)
             self.simulation_mode = True
             self.initialized = True
-            self._start_send_loop()
             return True
 
-    def _start_send_loop(self):
-        """Start the background 30fps frame-sending thread."""
+    def start_send_loop(self):
+        """Start the asyncio send loop. Must be called after the event loop is running."""
         self.running = True
-        self.thread = threading.Thread(target=self._send_loop, daemon=True)
-        self.thread.start()
-        logger.info(f"SDK: Send loop started (simulation={self.simulation_mode})")
+        self._task = asyncio.create_task(self._send_loop())
+        logger.info(f"SDK: Asyncio send loop started (simulation={self.simulation_mode})")
 
-    def _send_loop(self):
-        """Continuous loop — sends whatever is in current_points at 30fps."""
+    def _build_and_send_frame(self, points):
+        """Build SdkPoint array and send to DLL. Runs in executor thread."""
+        n = min(len(points), 8192)
+        arr = (SdkPoint * n)()
+
+        for i in range(n):
+            p = points[i]
+            arr[i].x = float(p.get('x', 0))
+            arr[i].y = float(p.get('y', 0))
+            arr[i].z = 0.0
+
+            color = p.get('color', 0)
+            if isinstance(color, str):
+                try:
+                    color = int(color, 16) if color.startswith('0x') else int(color)
+                except (ValueError, TypeError):
+                    color = 0
+            arr[i].color = int(color) & 0xFFFFFFFF
+            arr[i].rep_count = int(p.get('rep_count', 0))
+            arr[i].focus = 0
+            arr[i].status = 0
+            arr[i].zero = 0
+
+        result = self._dll.ldbSendFrameToImage(
+            self._image_name, n,
+            ctypes.byref(arr), ctypes.byref(self._zone_arr),
+            SCAN_RATE,
+        )
+        return n, result
+
+    async def _send_loop(self):
+        """Async 30fps loop — DLL calls run via the event loop, yielding between frames."""
         frame_time = 1.0 / TARGET_FPS
+        loop = asyncio.get_event_loop()
 
         while self.running:
             loop_start = time.time()
 
-            with self.lock:
-                points = self.current_points
+            points = self.current_points
 
-            if points and not self.simulation_mode and self.dll:
+            if points and self._ready and self._dll and self._image_name:
                 try:
-                    count = min(len(points), 8192)  # SDK max
-                    PointArray = SdkPoint * count
-                    arr = PointArray()
-
-                    for i in range(count):
-                        p = points[i]
-                        arr[i].x = float(p.get('x', 0))
-                        arr[i].y = float(p.get('y', 0))
-                        arr[i].z = 0.0
-                        # Parse color: could be int, hex string, or 0
-                        color = p.get('color', 0)
-                        if isinstance(color, str):
-                            color = int(color, 16) if color.startswith('0x') else int(color)
-                        arr[i].color = ctypes.c_uint32(color)
-                        arr[i].rep_count = int(p.get('rep_count', 0))
-                        arr[i].focus = 0
-                        arr[i].status = 0
-                        arr[i].zero = 0
-
-                    # Zone array: 256 bytes, first byte = 1 (zone 1, 1-based)
-                    zone_arr = (ctypes.c_uint8 * 256)()
-                    zone_arr[0] = 1
-
-                    self.dll.ldbSendFrameToImage(
-                        IMAGE_NAME,
-                        count,
-                        ctypes.byref(arr),
-                        ctypes.byref(zone_arr),
-                        SCAN_RATE,
-                    )
+                    n, result = self._build_and_send_frame(points)
                     self.frames_sent += 1
 
+                    if self.frames_sent == 1 or self.frames_sent % 300 == 0:
+                        logger.info(
+                            f"SDK SEND: frame #{self.frames_sent}, {n} pts, result={result}"
+                        )
+
                 except Exception as e:
-                    if self.frames_sent % 300 == 0:  # Log every ~10s
-                        logger.error(f"SDK: Frame send error: {e}")
+                    if self.frames_sent % 300 == 0:
+                        logger.error(f"SDK: Frame error: {e}")
+
             elif points and self.simulation_mode:
-                # In simulation mode, just count frames
                 self.frames_sent += 1
 
-            # Sleep to maintain target FPS
             elapsed = time.time() - loop_start
             sleep_time = frame_time - elapsed
-            if sleep_time > 0:
-                time.sleep(sleep_time)
+            await asyncio.sleep(max(sleep_time, 0.001))  # Always yield
 
-    def set_points(self, points, pattern_name=""):
-        """
-        Swap the current point list. Thread-safe — the send loop picks up
-        the new points on the very next frame.
-        """
-        with self.lock:
-            self.current_points = points
-            self.current_pattern_name = pattern_name
-        logger.info(f"SDK: Points updated — {len(points)} points, pattern='{pattern_name}'")
+    async def set_points(self, points, pattern_name=""):
+        """Swap the point list. Clear cues first so SDK output is visible."""
+        if points and self._ready:
+            await clear_cues_via_pangoscript()
+        self.current_points = points
+        self.current_pattern_name = pattern_name
+        logger.info(f"SDK: Points updated — {len(points)} pts, pattern={pattern_name!r}")
 
     def blackout(self):
-        """Clear everything from the laser."""
-        with self.lock:
-            self.current_points = []
-            self.current_pattern_name = ""
-        if self.dll and not self.simulation_mode:
+        self.current_points = []
+        self.current_pattern_name = ""
+        if self._dll and self._ready:
             try:
-                self.dll.ldbBlackout()
-                logger.info("SDK: Blackout sent")
+                self._dll.ldbBlackout()
+                logger.info("SDK: Blackout")
             except Exception as e:
                 logger.error(f"SDK: Blackout error: {e}")
 
     def get_status(self):
-        """Get current SDK status."""
-        with self.lock:
-            point_count = len(self.current_points)
-            pattern = self.current_pattern_name
         return {
             "initialized": self.initialized,
             "simulation_mode": self.simulation_mode,
-            "streaming": point_count > 0,
-            "point_count": point_count,
-            "current_pattern": pattern,
+            "streaming": len(self.current_points) > 0,
+            "point_count": len(self.current_points),
+            "current_pattern": self.current_pattern_name,
             "frames_sent": self.frames_sent,
             "fps": TARGET_FPS,
             "scan_rate": abs(SCAN_RATE),
@@ -244,17 +246,19 @@ class BeyondSDKManager:
         }
 
     def shutdown(self):
-        """Clean shutdown — stop loop, delete image, destroy DLL."""
+        """Clean shutdown."""
         logger.info("SDK: Shutting down...")
         self.running = False
-        if self.thread:
-            self.thread.join(timeout=2)
+        if self._task:
+            self._task.cancel()
 
-        if self.dll and not self.simulation_mode:
+        if self._dll and self._ready:
             try:
-                self.dll.ldbBlackout()
-                self.dll.ldbDeleteZoneImage(IMAGE_NAME)
-                self.dll.ldbDestroy()
-                logger.info("SDK: Clean shutdown complete")
+                if self._image_name:
+                    self._dll.ldbDeleteZoneImage(self._image_name)
+                    self._image_name = None
+                self._dll.ldbDestroy()
+                logger.info("SDK: Clean shutdown")
             except Exception as e:
                 logger.error(f"SDK: Shutdown error: {e}")
+        self._ready = False

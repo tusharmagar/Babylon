@@ -15,7 +15,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import AIBuilder from "@/components/AIBuilder";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8001";
 const API = `${BACKEND_URL}/api`;
 
 // ===== Cue Button Component =====
