@@ -8,10 +8,11 @@ import asyncio
 import socket
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
+from ai_agent import BeyondAIAgent
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -163,6 +164,14 @@ class BeyondConnectionManager:
 # Global connection manager instance
 beyond_manager = BeyondConnectionManager()
 
+# AI Agent instance
+ai_agent = None
+try:
+    ai_agent = BeyondAIAgent()
+    logger.info("BEYOND AI Agent initialized successfully")
+except Exception as e:
+    logger.warning(f"AI Agent not available: {e}")
+
 
 # ===== Pydantic Models =====
 class ConnectionConfig(BaseModel):
@@ -196,6 +205,29 @@ class CommandResponse(BaseModel):
     response: Optional[str] = None
     error: Optional[str] = None
     log: Optional[dict] = None
+
+
+# Chat Models
+class ChatMessageRequest(BaseModel):
+    message: str
+    session_id: Optional[str] = None
+
+class ChatMessage(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    session_id: str
+    role: str  # "user" or "assistant"
+    content: str  # user message or AI explanation
+    ai_message: Optional[str] = None
+    pattern_name: Optional[str] = None
+    point_data: Optional[List[Dict[str, Any]]] = None
+    python_code: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class ChatSession(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    title: str = "New Chat"
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
 
 # ===== Lifespan for startup/shutdown =====
@@ -372,6 +404,118 @@ async def clear_logs():
     """Clear command logs"""
     beyond_manager.command_logs = []
     return {"success": True, "message": "Logs cleared"}
+
+
+# ===== Chat / AI Agent Endpoints =====
+
+@api_router.post("/chat/new")
+async def create_chat_session():
+    """Create a new chat session"""
+    session = ChatSession()
+    doc = session.model_dump()
+    await db.chat_sessions.insert_one(doc)
+    return {"session_id": doc["id"], "title": doc["title"], "created_at": doc["created_at"]}
+
+
+@api_router.get("/chat/sessions")
+async def list_chat_sessions():
+    """List all chat sessions"""
+    sessions = await db.chat_sessions.find({}, {"_id": 0}).sort("updated_at", -1).to_list(50)
+    return {"sessions": sessions}
+
+
+@api_router.get("/chat/{session_id}/messages")
+async def get_chat_messages(session_id: str):
+    """Get all messages for a chat session"""
+    messages = await db.chat_messages.find(
+        {"session_id": session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(200)
+    return {"messages": messages}
+
+
+@api_router.delete("/chat/{session_id}")
+async def delete_chat_session(session_id: str):
+    """Delete a chat session and its messages"""
+    await db.chat_sessions.delete_one({"id": session_id})
+    await db.chat_messages.delete_many({"session_id": session_id})
+    return {"success": True}
+
+
+@api_router.post("/chat/send")
+async def send_chat_message(request: ChatMessageRequest):
+    """Send a message to the AI agent and get a laser pattern response"""
+    if not ai_agent:
+        raise HTTPException(status_code=503, detail="AI Agent not available. Check EMERGENT_LLM_KEY.")
+
+    session_id = request.session_id
+
+    # Create session if not provided
+    if not session_id:
+        session = ChatSession(title=request.message[:50])
+        doc = session.model_dump()
+        await db.chat_sessions.insert_one(doc)
+        session_id = doc["id"]
+    else:
+        # Update session title if first message, and update timestamp
+        session_doc = await db.chat_sessions.find_one({"id": session_id})
+        if session_doc:
+            update_fields = {"updated_at": datetime.now(timezone.utc).isoformat()}
+            # If title is still default, update it with first message
+            if session_doc.get("title") == "New Chat":
+                update_fields["title"] = request.message[:50]
+            await db.chat_sessions.update_one(
+                {"id": session_id},
+                {"$set": update_fields}
+            )
+
+    # Save user message
+    user_msg = ChatMessage(
+        session_id=session_id,
+        role="user",
+        content=request.message
+    )
+    await db.chat_messages.insert_one(user_msg.model_dump())
+
+    # Get conversation history for context
+    history_docs = await db.chat_messages.find(
+        {"session_id": session_id}, {"_id": 0}
+    ).sort("created_at", 1).to_list(50)
+
+    history = []
+    for msg_doc in history_docs:
+        history.append({
+            "role": msg_doc["role"],
+            "content": msg_doc["content"],
+            "ai_message": msg_doc.get("ai_message", "")
+        })
+
+    # Generate AI response
+    ai_response = await ai_agent.generate_pattern(
+        user_message=request.message,
+        session_id=session_id,
+        history=history[:-1]  # Exclude the message we just added
+    )
+
+    # Save AI response as a message
+    ai_msg = ChatMessage(
+        session_id=session_id,
+        role="assistant",
+        content=ai_response.get("message", ""),
+        ai_message=ai_response.get("message", ""),
+        pattern_name=ai_response.get("pattern_name", ""),
+        point_data=ai_response.get("point_data", []),
+        python_code=ai_response.get("python_code", "")
+    )
+    await db.chat_messages.insert_one(ai_msg.model_dump())
+
+    return {
+        "session_id": session_id,
+        "message": ai_response.get("message", ""),
+        "pattern_name": ai_response.get("pattern_name", ""),
+        "point_data": ai_response.get("point_data", []),
+        "python_code": ai_response.get("python_code", ""),
+        "message_id": ai_msg.id
+    }
 
 
 # Include the router in the main app

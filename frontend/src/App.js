@@ -1,14 +1,16 @@
 import { useState, useEffect, useRef } from "react";
 import "@/App.css";
 import axios from "axios";
-import { Settings, Power, Square, AlertTriangle, Terminal, Wifi, WifiOff, Trash2 } from "lucide-react";
+import { Settings, Power, Square, AlertTriangle, Terminal, Wifi, WifiOff, Trash2, Cpu, LayoutGrid } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
+import AIBuilder from "@/components/AIBuilder";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -351,93 +353,118 @@ function App() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto p-6 relative z-10">
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <Tabs defaultValue="cues" className="w-full">
+          <TabsList className="bg-[#1A1A1A] border border-white/10 mb-6 p-1 h-auto">
+            <TabsTrigger
+              value="cues"
+              className="data-[state=active]:bg-green-600 data-[state=active]:text-white text-zinc-400 px-4 py-2 rounded-md text-sm font-semibold transition-all gap-2"
+            >
+              <LayoutGrid className="w-4 h-4" />
+              Cues
+            </TabsTrigger>
+            <TabsTrigger
+              value="ai-builder"
+              className="data-[state=active]:bg-green-600 data-[state=active]:text-white text-zinc-400 px-4 py-2 rounded-md text-sm font-semibold transition-all gap-2"
+            >
+              <Cpu className="w-4 h-4" />
+              AI Builder
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="cues">
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           
-          {/* Cue Grid */}
-          <div className="lg:col-span-8">
-            <div className="card-surface p-4">
-              <div className="flex items-center gap-2 mb-4">
-                <Square className="w-5 h-5 text-green-500" />
-                <h2 className="font-bold text-lg">Cue Triggers</h2>
-                <span className="text-xs text-zinc-500 ml-2">Page 1</span>
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3" data-testid="cue-grid">
-                {cueNumbers.map((num) => (
-                  <CueButton
-                    key={num}
-                    cueNumber={num}
-                    onClick={handleStartCue}
-                    isActive={activeCue === num}
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
-
-          {/* Controls Panel */}
-          <div className="lg:col-span-4 flex flex-col gap-6">
-            
-            {/* Master Controls */}
-            <div className="card-surface p-4">
-              <div className="flex items-center gap-2 mb-4">
-                <AlertTriangle className="w-5 h-5 text-amber-500" />
-                <h2 className="font-bold text-lg">Master Controls</h2>
-              </div>
-              <div className="space-y-3">
-                <button
-                  data-testid="stop-all-btn"
-                  onClick={handleStopAll}
-                  className="stop-button w-full h-16 rounded-lg text-lg btn-press flex items-center justify-center gap-2"
-                >
-                  <Square className="w-6 h-6" />
-                  STOP ALL
-                </button>
-                <button
-                  data-testid="blackout-btn"
-                  onClick={handleBlackoutToggle}
-                  className={`blackout-button w-full h-16 rounded-lg text-lg btn-press flex items-center justify-center gap-2 ${blackoutActive ? 'active' : ''}`}
-                >
-                  <Power className="w-6 h-6" />
-                  {blackoutActive ? 'BLACKOUT ON' : 'BLACKOUT'}
-                </button>
-              </div>
-            </div>
-
-            {/* Command Logs */}
-            <div className="card-surface p-4 flex-1 flex flex-col min-h-[300px]">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2">
-                  <Terminal className="w-5 h-5 text-green-500" />
-                  <h2 className="font-bold text-lg">Command Log</h2>
-                </div>
-                <Button
-                  data-testid="clear-logs-btn"
-                  variant="ghost"
-                  size="icon"
-                  onClick={handleClearLogs}
-                  className="text-zinc-500 hover:text-white hover:bg-white/10 h-8 w-8"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </Button>
-              </div>
-              <div className="terminal-panel flex-1 p-3 overflow-hidden relative">
-                <div className="terminal-scanlines absolute inset-0" />
-                <ScrollArea className="h-full terminal-scroll" data-testid="command-logs">
-                  <div className="relative z-10">
-                    {logs.length === 0 ? (
-                      <div className="text-zinc-600 text-xs font-mono">No commands yet...</div>
-                    ) : (
-                      logs.map((log) => (
-                        <LogEntry key={log.id} log={log} />
-                      ))
-                    )}
-                    <div ref={logsEndRef} />
+              {/* Cue Grid */}
+              <div className="lg:col-span-8">
+                <div className="card-surface p-4">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Square className="w-5 h-5 text-green-500" />
+                    <h2 className="font-bold text-lg">Cue Triggers</h2>
+                    <span className="text-xs text-zinc-500 ml-2">Page 1</span>
                   </div>
-                </ScrollArea>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3" data-testid="cue-grid">
+                    {cueNumbers.map((num) => (
+                      <CueButton
+                        key={num}
+                        cueNumber={num}
+                        onClick={handleStartCue}
+                        isActive={activeCue === num}
+                      />
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Controls Panel */}
+              <div className="lg:col-span-4 flex flex-col gap-6">
+            
+                {/* Master Controls */}
+                <div className="card-surface p-4">
+                  <div className="flex items-center gap-2 mb-4">
+                    <AlertTriangle className="w-5 h-5 text-amber-500" />
+                    <h2 className="font-bold text-lg">Master Controls</h2>
+                  </div>
+                  <div className="space-y-3">
+                    <button
+                      data-testid="stop-all-btn"
+                      onClick={handleStopAll}
+                      className="stop-button w-full h-16 rounded-lg text-lg btn-press flex items-center justify-center gap-2"
+                    >
+                      <Square className="w-6 h-6" />
+                      STOP ALL
+                    </button>
+                    <button
+                      data-testid="blackout-btn"
+                      onClick={handleBlackoutToggle}
+                      className={`blackout-button w-full h-16 rounded-lg text-lg btn-press flex items-center justify-center gap-2 ${blackoutActive ? 'active' : ''}`}
+                    >
+                      <Power className="w-6 h-6" />
+                      {blackoutActive ? 'BLACKOUT ON' : 'BLACKOUT'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Command Logs */}
+                <div className="card-surface p-4 flex-1 flex flex-col min-h-[300px]">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="w-5 h-5 text-green-500" />
+                      <h2 className="font-bold text-lg">Command Log</h2>
+                    </div>
+                    <Button
+                      data-testid="clear-logs-btn"
+                      variant="ghost"
+                      size="icon"
+                      onClick={handleClearLogs}
+                      className="text-zinc-500 hover:text-white hover:bg-white/10 h-8 w-8"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <div className="terminal-panel flex-1 p-3 overflow-hidden relative">
+                    <div className="terminal-scanlines absolute inset-0" />
+                    <ScrollArea className="h-full terminal-scroll" data-testid="command-logs">
+                      <div className="relative z-10">
+                        {logs.length === 0 ? (
+                          <div className="text-zinc-600 text-xs font-mono">No commands yet...</div>
+                        ) : (
+                          logs.map((log) => (
+                            <LogEntry key={log.id} log={log} />
+                          ))
+                        )}
+                        <div ref={logsEndRef} />
+                      </div>
+                    </ScrollArea>
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          </TabsContent>
+
+          <TabsContent value="ai-builder">
+            <AIBuilder />
+          </TabsContent>
+        </Tabs>
       </main>
 
       {/* Settings Dialog */}
