@@ -284,34 +284,54 @@ class BeyondSDKManager:
             if consecutive_errors > 10:
                 await asyncio.sleep(1.0)
 
-    def _refresh_zone_image(self):
-        """Delete + recreate the zone image to force a clean DLL state.
+    def _rotate_zone_image(self):
+        """Delete the current zone image and create a fresh one with a new name.
 
-        After stopping content, BEYOND's zone image handle can go stale and
-        subsequent ldbSendFrameToImage calls return result=2. Recreating the
-        image every time we start new content avoids that.
+        Reusing the same name (or ldbBlackout) leaves BEYOND in a state where
+        subsequent ldbSendFrameToImage calls return result=2 until the server
+        is restarted. Rotating the name gives us a clean handle every time.
         """
         if not self._dll or not self._ready:
             return
         try:
-            self._dll.ldbDeleteZoneImage(self._image_name)
-        except Exception as e:
-            logger.debug(f"SDK: delete zone image skipped ({e})")
+            if self._image_name:
+                self._dll.ldbDeleteZoneImage(self._image_name)
+        except Exception:
+            pass
+        new_name = f"Babylon_{_uuid.uuid4().hex[:8]}".encode("ascii")
+        self._image_name = new_name
         try:
             r = self._dll.ldbCreateZoneImage(0, self._image_name)
             self._dll.ldbEnableLaserOutput()
-            logger.info(f"SDK: zone image refreshed (CreateZoneImage={r})")
+            logger.info(f"SDK: zone image rotated → {new_name.decode()} (CreateZoneImage={r})")
         except Exception as e:
-            logger.warning(f"SDK: refresh zone image failed: {e}")
+            logger.warning(f"SDK: rotate zone image failed: {e}")
 
     async def set_points(self, points, pattern_name=""):
-        """Swap the point list. Clear cues first so SDK output is visible."""
+        """Swap the point list. Rotates the zone image so a fresh pattern
+        always starts with a clean DLL handle."""
+        # Stop any running frame/song animation — we're taking the image over
+        await self.stop_song()
+        await self.stop_gif()
         if points and self._ready:
-            await clear_cues_via_pangoscript()
-            self._refresh_zone_image()
+            self._rotate_zone_image()
         self.current_points = points
         self.current_pattern_name = pattern_name
         logger.info(f"SDK: Points updated — {len(points)} pts, pattern={pattern_name!r}")
+
+    async def play_pattern(self, scenes, durations_ms, pattern_name=""):
+        """Cycle through N static scenes with per-scene hold durations.
+
+        scenes: list of point dicts ({x, y, color, rep_count}) — same shape as
+          set_points input
+        durations_ms: parallel list of hold times
+        Reuses play_gif under the hood — same infinite-loop animation path.
+        """
+        tuple_frames = [
+            [(int(p.get("x", 0)), int(p.get("y", 0)), int(p.get("color", 0))) for p in scene]
+            for scene in scenes
+        ]
+        await self.play_gif(tuple_frames, list(durations_ms), gif_name=pattern_name or "pattern")
 
     async def play_gif(self, frames_points, durations_ms, gif_name=""):
         """Play a GIF — cycle through pre-vectorized frames at their native durations.
@@ -323,11 +343,7 @@ class BeyondSDKManager:
         await self.stop_gif()
 
         if self._ready:
-            await clear_cues_via_pangoscript()
-            try:
-                self._dll.ldbEnableLaserOutput()
-            except Exception:
-                pass
+            self._rotate_zone_image()
 
         # Pre-pack each frame into ctypes arrays (done once, reused in loop)
         packed = []
@@ -414,23 +430,7 @@ class BeyondSDKManager:
             return False
 
         if self._ready:
-            # Rotate the zone image name so BEYOND always sees a fresh handle.
-            # Keeping the same name across multiple song plays causes
-            # ldbSendFrameToImage to start returning result=2 on the second
-            # play (stale handle in BEYOND).
-            try:
-                if self._image_name:
-                    self._dll.ldbDeleteZoneImage(self._image_name)
-            except Exception:
-                pass
-            new_name = f"Babylon_{_uuid.uuid4().hex[:8]}".encode("ascii")
-            self._image_name = new_name
-            try:
-                r = self._dll.ldbCreateZoneImage(0, self._image_name)
-                self._dll.ldbEnableLaserOutput()
-                logger.info(f"SDK SONG: new zone image {new_name.decode()} (CreateZoneImage={r})")
-            except Exception as e:
-                logger.warning(f"SDK SONG: new image failed: {e}")
+            self._rotate_zone_image()
 
         # Pre-pack all laser frames into ctypes arrays once up front
         packed = []
@@ -487,10 +487,9 @@ class BeyondSDKManager:
                 if remaining > 0:
                     outdata[:remaining] = self._song_audio_data[start:start + remaining].reshape(outdata[:remaining].shape)
                 outdata[remaining:] = 0
-                # Signal end via event loop
                 try:
-                    loop = asyncio.get_event_loop()
-                    loop.call_soon_threadsafe(self._song_stop_event.set)
+                    ev_loop = asyncio.get_event_loop()
+                    ev_loop.call_soon_threadsafe(self._song_stop_event.set)
                 except Exception:
                     pass
             else:
@@ -602,18 +601,15 @@ class BeyondSDKManager:
         # which naturally stops laser output.
 
     def blackout(self):
+        """Stop all laser output cleanly. Does NOT call ldbBlackout — that
+        puts BEYOND's zone image into a broken state that requires a server
+        restart to recover. Clearing current_points plus stopping animations
+        starves the scanner just as effectively."""
         self.current_points = []
         self.current_pattern_name = ""
-        if self.gif_active:
-            self.gif_active = False
-        if self.song_active:
-            self.song_active = False
-        if self._dll and self._ready:
-            try:
-                self._dll.ldbBlackout()
-                logger.info("SDK: Blackout")
-            except Exception as e:
-                logger.error(f"SDK: Blackout error: {e}")
+        self.gif_active = False
+        self.song_active = False
+        logger.info("SDK: Blackout (idle frames)")
 
     def get_status(self):
         return {
