@@ -132,7 +132,6 @@ const Library = () => {
 
   useEffect(() => {
     loadLibrary();
-    // Poll streaming status so we know if anything is currently playing
     const interval = setInterval(async () => {
       try {
         const resp = await fetch(`${API}/stream/status`);

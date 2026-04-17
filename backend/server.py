@@ -215,6 +215,11 @@ class LaserSendRequest(BaseModel):
     point_data: List[Dict[str, Any]]
     pattern_name: str = ""
 
+class LaserPatternRequest(BaseModel):
+    scenes: List[List[Dict[str, Any]]]
+    durations_ms: List[int]
+    pattern_name: str = ""
+
 class YouTubeAnalyzeRequest(BaseModel):
     youtube_url: str
 
@@ -464,6 +469,26 @@ async def laser_send(request: LaserSendRequest):
     }
 
 
+@api_router.post("/laser/pattern/play")
+async def laser_pattern_play(request: LaserPatternRequest):
+    """Play an animated pattern (list of scenes + per-scene hold durations)."""
+    if not sdk_manager.initialized:
+        raise HTTPException(status_code=503, detail="SDK not initialized")
+    if len(request.scenes) != len(request.durations_ms):
+        raise HTTPException(status_code=400, detail="scenes and durations_ms must be equal length")
+    if not request.scenes:
+        raise HTTPException(status_code=400, detail="scenes cannot be empty")
+
+    await sdk_manager.play_pattern(request.scenes, request.durations_ms, pattern_name=request.pattern_name)
+    return {
+        "success": True,
+        "scene_count": len(request.scenes),
+        "total_ms": sum(request.durations_ms),
+        "pattern_name": request.pattern_name,
+        "simulation_mode": sdk_manager.simulation_mode,
+    }
+
+
 @api_router.post("/laser/blackout")
 async def laser_blackout():
     """Clear the laser — stop all output."""
@@ -508,60 +533,116 @@ async def delete_chat_session(session_id: str):
     return {"success": True}
 
 
-@api_router.post("/chat/send")
-async def send_chat_message(request: ChatMessageRequest):
-    """Send a message to the AI agent and get a laser pattern response."""
-    logger.info(f"CHAT: Received message: {request.message[:80]!r}")
+@api_router.post("/chat/stream")
+async def chat_stream(request: ChatMessageRequest):
+    """Stream the AI agent's thinking, tool calls, and final pattern via SSE."""
+    logger.info(f"CHAT: streaming message: {request.message[:80]!r}")
 
     if not ai_agent:
-        logger.error("CHAT: AI Agent is None — OPENAI_API_KEY missing or init failed")
         raise HTTPException(status_code=503, detail="AI Agent not available. Check OPENAI_API_KEY.")
 
     session_id = request.session_id
-
-    # Create session if needed
     if not session_id:
         session = db.create_session(title=request.message[:50])
         session_id = session["id"]
     else:
-        # Update session
         existing = db.get_session(session_id)
         if existing:
             title_update = request.message[:50] if existing.get("title") == "New Chat" else None
             db.update_session(session_id, title=title_update)
 
-    # Save user message
     db.add_message(session_id=session_id, role="user", content=request.message)
-
-    # Build conversation history for context
     history = db.get_recent_history(session_id, limit=10)
 
-    # Generate AI response
-    logger.info("CHAT: Calling OpenAI...")
-    ai_response = await ai_agent.generate_pattern(
-        user_message=request.message,
-        session_id=session_id,
-        history=history[:-1]  # Exclude the message we just added
-    )
-    logger.info(f"CHAT: Got response — pattern={ai_response.get('pattern_name')!r}, points={len(ai_response.get('point_data', []))}")
+    async def event_source():
+        # Tell the client which session we're in up front
+        yield {"event": "session", "data": json.dumps({"session_id": session_id})}
 
-    # Save AI response
+        final_payload: Optional[dict] = None
+        event_count = 0
+        try:
+            async for ev in ai_agent.stream_pattern(
+                user_message=request.message,
+                history=history[:-1],
+            ):
+                event_count += 1
+                if ev["type"] in ("tool_start", "tool_done", "final", "error"):
+                    preview = {
+                        k: v for k, v in ev.items()
+                        if k not in ("point_data", "scenes", "durations_ms")
+                    }
+                    preview["point_count"] = len(ev.get("point_data", []))
+                    if "scenes" in ev:
+                        preview["scene_count"] = len(ev["scenes"])
+                        preview["total_ms"] = sum(ev.get("durations_ms", []))
+                    logger.info(f"CHAT SSE → {ev['type']}: {preview}")
+                yield {"event": ev["type"], "data": json.dumps(ev)}
+                if ev["type"] == "final":
+                    final_payload = ev
+        except Exception as e:
+            logger.error(f"CHAT stream error: {e}", exc_info=True)
+            yield {"event": "error", "data": json.dumps({"type": "error", "error": str(e)})}
+            return
+
+        logger.info(f"CHAT SSE closed — {event_count} events, final={bool(final_payload)}")
+
+        # Persist to DB after streaming completes
+        if final_payload:
+            try:
+                db.add_message(
+                    session_id=session_id,
+                    role="assistant",
+                    content=final_payload.get("message", ""),
+                    ai_message=final_payload.get("message", ""),
+                    pattern_name=final_payload.get("pattern_name", ""),
+                    point_data=final_payload.get("point_data", []),
+                    python_code="",
+                )
+            except Exception as e:
+                logger.warning(f"CHAT: failed to persist AI message: {e}")
+
+    return EventSourceResponse(event_source())
+
+
+@api_router.post("/chat/send")
+async def send_chat_message(request: ChatMessageRequest):
+    """Deprecated non-streaming endpoint. Collects the stream and returns JSON
+    so older clients keep working. Prefer /chat/stream."""
+    if not ai_agent:
+        raise HTTPException(status_code=503, detail="AI Agent not available. Check OPENAI_API_KEY.")
+
+    session_id = request.session_id
+    if not session_id:
+        session = db.create_session(title=request.message[:50])
+        session_id = session["id"]
+
+    db.add_message(session_id=session_id, role="user", content=request.message)
+    history = db.get_recent_history(session_id, limit=10)
+
+    final_payload: dict = {}
+    async for ev in ai_agent.stream_pattern(
+        user_message=request.message,
+        history=history[:-1],
+    ):
+        if ev["type"] == "final":
+            final_payload = ev
+        elif ev["type"] == "error":
+            raise HTTPException(status_code=500, detail=ev["error"])
+
     msg_id = db.add_message(
         session_id=session_id,
         role="assistant",
-        content=ai_response.get("message", ""),
-        ai_message=ai_response.get("message", ""),
-        pattern_name=ai_response.get("pattern_name", ""),
-        point_data=ai_response.get("point_data", []),
-        python_code=ai_response.get("python_code", ""),
+        content=final_payload.get("message", ""),
+        ai_message=final_payload.get("message", ""),
+        pattern_name=final_payload.get("pattern_name", ""),
+        point_data=final_payload.get("point_data", []),
     )
 
     return {
         "session_id": session_id,
-        "message": ai_response.get("message", ""),
-        "pattern_name": ai_response.get("pattern_name", ""),
-        "point_data": ai_response.get("point_data", []),
-        "python_code": ai_response.get("python_code", ""),
+        "message": final_payload.get("message", ""),
+        "pattern_name": final_payload.get("pattern_name", ""),
+        "point_data": final_payload.get("point_data", []),
         "message_id": msg_id,
     }
 
@@ -970,17 +1051,21 @@ async def stream_start(request: StreamRequest):
     frames = _stored_frames.get(request.job_id)
     if not frames:
         loop = asyncio.get_event_loop()
-        # Video jobs persist as pickle; song jobs as .ild
-        frames_pkl = Path(job.get('frames_path', ''))
-        ilda_path = Path(job.get('ilda_path', ''))
-        if frames_pkl.exists():
+        # Video jobs persist as pickle; song jobs as .ild. Guard against
+        # empty strings — Path("") == Path(".") which always "exists".
+        frames_pkl_str = job.get('frames_path') or ''
+        ilda_path_str = job.get('ilda_path') or ''
+        frames_pkl = Path(frames_pkl_str) if frames_pkl_str else None
+        ilda_path = Path(ilda_path_str) if ilda_path_str else None
+
+        if frames_pkl and frames_pkl.is_file():
             import pickle
             logger.info(f"Loading frames from {frames_pkl}")
             def _load_pkl():
                 with open(frames_pkl, "rb") as f:
                     return pickle.load(f)
             frames = await loop.run_in_executor(None, _load_pkl)
-        elif ilda_path.exists():
+        elif ilda_path and ilda_path.is_file():
             from services.ilda_reader import read_ilda_file
             logger.info(f"Loading frames from {ilda_path}")
             frames = await loop.run_in_executor(None, read_ilda_file, ilda_path)

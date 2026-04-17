@@ -6,7 +6,49 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from openai import AsyncOpenAI
+from typing import List, Tuple
+
 from models.laser_types import ShowDesign, SongSection, SyncedLine
+
+_DEFAULT_PALETTE: List[Tuple[int, int, int]] = [
+    (0, 255, 100), (255, 0, 200), (0, 150, 255), (255, 255, 0),
+]
+
+
+def _normalize_palette(raw) -> List[Tuple[int, int, int]]:
+    """Coerce whatever the LLM returned into List[(r,g,b)] of ints in 0-255.
+
+    LLMs occasionally emit [[[r,g,b], [r,g,b]]] (one extra nesting level) or
+    entries of the wrong length/type. Normalizing here prevents downstream
+    `TypeError: can't multiply sequence by non-int` in laser_generator.
+    """
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return list(_DEFAULT_PALETTE)
+
+    items = list(raw)
+    # Unwrap one level of nesting if it looks like [[[r,g,b], ...]]
+    if (
+        len(items) == 1
+        and isinstance(items[0], (list, tuple))
+        and items[0]
+        and isinstance(items[0][0], (list, tuple))
+    ):
+        items = list(items[0])
+
+    out: List[Tuple[int, int, int]] = []
+    for entry in items:
+        if not isinstance(entry, (list, tuple)) or len(entry) != 3:
+            continue
+        r, g, b = entry
+        if not all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (r, g, b)):
+            continue
+        out.append((
+            max(0, min(255, int(r))),
+            max(0, min(255, int(g))),
+            max(0, min(255, int(b))),
+        ))
+
+    return out if out else list(_DEFAULT_PALETTE)
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +139,7 @@ Design a laser show for this song."""
     logger.info(f"AI show design: {len(data.get('sections', []))} sections, style={data.get('text_style')}")
     
     # Parse into ShowDesign
-    palette = [tuple(c) for c in data.get('color_palette', [(0,255,100), (255,0,200), (0,150,255)])]
+    palette = _normalize_palette(data.get('color_palette'))
     sections = [
         SongSection(
             label=s['label'],

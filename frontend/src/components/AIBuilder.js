@@ -16,6 +16,8 @@ import {
   ChevronRight,
   Zap,
   ZapOff,
+  Brain,
+  Wrench,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -74,24 +76,68 @@ const CodeBlock = ({ code, patternName }) => {
   );
 };
 
-// Send to Laser button
-const SendToLaserButton = ({ pointData, patternName, disabled }) => {
+// Stop-the-stream button — kills whatever is currently playing on the laser
+const StopLaserButton = ({ compact = false }) => {
+  const [stopping, setStopping] = useState(false);
+
+  const handleStop = async () => {
+    setStopping(true);
+    try {
+      await axios.post(`${API}/laser/stop`);
+      toast.success("Laser stopped");
+    } catch (e) {
+      toast.error(e.response?.data?.detail || "Failed to stop laser");
+    } finally {
+      setStopping(false);
+    }
+  };
+
+  return (
+    <button
+      onClick={handleStop}
+      disabled={stopping}
+      className={`${compact ? "h-10 w-10 p-0" : "h-11 px-4"} flex-shrink-0 flex items-center justify-center gap-2 rounded-lg bg-red-600/20 border border-red-500/40 text-red-300 hover:bg-red-600/30 disabled:opacity-40 font-semibold text-sm transition-all active:scale-[0.98]`}
+      title="Stop laser output"
+    >
+      {stopping ? <Loader2 className="w-4 h-4 animate-spin" /> : <ZapOff className="w-4 h-4" />}
+      {!compact && <span>Stop</span>}
+    </button>
+  );
+};
+
+
+// Send to Laser button — supports static patterns and animated scene lists
+const SendToLaserButton = ({ pointData, patternName, scenes, durationsMs, disabled }) => {
   const [sending, setSending] = useState(false);
+  const isAnimated = Array.isArray(scenes) && scenes.length > 1;
 
   const handleSend = async () => {
-    if (!pointData || pointData.length === 0) return;
+    if (!isAnimated && (!pointData || pointData.length === 0)) return;
     setSending(true);
     try {
-      const res = await axios.post(`${API}/laser/send`, {
-        point_data: pointData,
-        pattern_name: patternName || "AI Pattern",
-      });
-      if (res.data.success) {
-        toast.success(
-          res.data.simulation_mode
-            ? `Pattern loaded (simulation) — ${res.data.point_count} points`
-            : `Streaming to laser — ${res.data.point_count} points`
-        );
+      if (isAnimated) {
+        const res = await axios.post(`${API}/laser/pattern/play`, {
+          scenes,
+          durations_ms: durationsMs,
+          pattern_name: patternName || "AI Animation",
+        });
+        if (res.data.success) {
+          toast.success(
+            `Animating ${res.data.scene_count} scenes (${(res.data.total_ms / 1000).toFixed(1)}s loop)`
+          );
+        }
+      } else {
+        const res = await axios.post(`${API}/laser/send`, {
+          point_data: pointData,
+          pattern_name: patternName || "AI Pattern",
+        });
+        if (res.data.success) {
+          toast.success(
+            res.data.simulation_mode
+              ? `Pattern loaded (simulation) — ${res.data.point_count} points`
+              : `Streaming to laser — ${res.data.point_count} points`
+          );
+        }
       }
     } catch (e) {
       toast.error(e.response?.data?.detail || "Failed to send to laser");
@@ -160,6 +206,11 @@ const ChatMessageItem = ({ message }) => {
               <span className="text-xs text-zinc-400">
                 Laser Preview — {message.pattern_name || "Pattern"}
               </span>
+              {Array.isArray(message.scenes) && message.scenes.length > 1 && (
+                <span className="text-[10px] uppercase tracking-wide font-semibold text-purple-400 px-1.5 py-0.5 rounded bg-purple-500/10 border border-purple-500/30">
+                  {message.scenes.length} scenes · {((message.durations_ms || []).reduce((a, b) => a + b, 0) / 1000).toFixed(1)}s
+                </span>
+              )}
               <span className="text-xs text-zinc-600 ml-auto">
                 {message.point_data.length} points
               </span>
@@ -167,11 +218,16 @@ const ChatMessageItem = ({ message }) => {
             <div className="h-[280px] bg-[#050505]">
               <LaserPreview pointData={message.point_data} className="w-full h-full" />
             </div>
-            <div className="p-2 bg-white/5 border-t border-white/10">
-              <SendToLaserButton
-                pointData={message.point_data}
-                patternName={message.pattern_name}
-              />
+            <div className="p-2 bg-white/5 border-t border-white/10 flex gap-2">
+              <div className="flex-1">
+                <SendToLaserButton
+                  pointData={message.point_data}
+                  patternName={message.pattern_name}
+                  scenes={message.scenes}
+                  durationsMs={message.durations_ms}
+                />
+              </div>
+              <StopLaserButton />
             </div>
           </div>
         )}
@@ -193,6 +249,84 @@ const ChatMessageItem = ({ message }) => {
     </div>
   );
 };
+
+// Live streaming assistant message (thinking + tool calls + message, as they arrive)
+const StreamingMessage = ({ streaming }) => {
+  const [thinkingOpen, setThinkingOpen] = useState(true);
+  const hasThinking = streaming.thinking && streaming.thinking.length > 0;
+  const hasTools = streaming.toolCalls && streaming.toolCalls.length > 0;
+
+  return (
+    <div className="flex gap-3">
+      <div className="w-8 h-8 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0 mt-0.5">
+        <Bot className="w-4 h-4 text-blue-400" />
+      </div>
+      <div className="max-w-[90%] space-y-2 flex-1 min-w-0">
+        {/* Thinking (collapsible) */}
+        {hasThinking && (
+          <div className="rounded-lg border border-white/10 bg-[#0F0F0F] overflow-hidden">
+            <button
+              onClick={() => setThinkingOpen((v) => !v)}
+              className="w-full flex items-center gap-2 px-3 py-2 bg-white/5 border-b border-white/10 text-xs text-zinc-400 hover:bg-white/10 transition-colors"
+            >
+              <Brain className="w-3.5 h-3.5 text-purple-400" />
+              <span className="font-semibold">Thinking</span>
+              <ChevronRight
+                className={`w-3 h-3 ml-auto transition-transform ${thinkingOpen ? "rotate-90" : ""}`}
+              />
+            </button>
+            {thinkingOpen && (
+              <pre className="p-3 text-xs font-mono text-zinc-500 whitespace-pre-wrap leading-relaxed max-h-[180px] overflow-y-auto">
+                {streaming.thinking}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {/* Tool calls list */}
+        {hasTools && (
+          <div className="rounded-lg border border-white/10 bg-[#0F0F0F] px-3 py-2 space-y-1.5">
+            {streaming.toolCalls.map((t, i) => (
+              <div key={i} className="flex items-center gap-2 text-xs">
+                {t.done ? (
+                  <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
+                ) : (
+                  <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin flex-shrink-0" />
+                )}
+                <Wrench className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+                <span className="text-zinc-300 font-mono">{t.name}</span>
+                {t.done && (
+                  <span className="text-zinc-600 ml-1">· {t.point_count} pts</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Message text as it streams */}
+        {streaming.message && (
+          <div className="bg-[#1A1A1A] border border-white/10 rounded-2xl rounded-tl-sm px-4 py-2.5">
+            <p className="text-sm text-zinc-300 whitespace-pre-wrap leading-relaxed">
+              {streaming.message}
+              <span className="inline-block w-1.5 h-3 bg-green-500 ml-0.5 align-middle animate-pulse" />
+            </p>
+          </div>
+        )}
+
+        {/* Idle pulse if nothing yet */}
+        {!hasThinking && !hasTools && !streaming.message && (
+          <div className="bg-[#1A1A1A] border border-white/10 rounded-2xl rounded-tl-sm px-4 py-3">
+            <div className="flex items-center gap-2">
+              <Loader2 className="w-4 h-4 text-green-500 animate-spin" />
+              <span className="text-sm text-zinc-400">Thinking...</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 
 // Suggestion chips
 const SUGGESTIONS = [
@@ -291,6 +425,8 @@ const AIBuilder = ({ sdkStatus }) => {
     }
   };
 
+  const [streaming, setStreaming] = useState(null);
+
   const sendMessage = async (text) => {
     const messageText = text || input.trim();
     if (!messageText || loading) return;
@@ -306,34 +442,117 @@ const AIBuilder = ({ sdkStatus }) => {
     };
     setMessages((prev) => [...prev, tempUserMsg]);
 
+    // Initialize streaming state
+    setStreaming({ thinking: "", toolCalls: [], message: "" });
+
+    let sessionIdLocal = currentSessionId;
+    let finalPayload = null;
+
     try {
-      const res = await axios.post(`${API}/chat/send`, {
-        message: messageText,
-        session_id: currentSessionId,
-      }, { timeout: 120000 });
-
-      const data = res.data;
-
-      if (!currentSessionId) {
-        setCurrentSessionId(data.session_id);
+      const resp = await fetch(`${API}/chat/stream`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: messageText, session_id: currentSessionId }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({}));
+        throw new Error(err.detail || `HTTP ${resp.status}`);
       }
 
+      const reader = resp.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      const splitFrame = (s) => {
+        // SSE frames can be separated by \n\n or \r\n\r\n — handle both
+        const idxA = s.indexOf("\n\n");
+        const idxB = s.indexOf("\r\n\r\n");
+        if (idxA === -1 && idxB === -1) return [-1, 0];
+        if (idxA === -1) return [idxB, 4];
+        if (idxB === -1) return [idxA, 2];
+        return idxA < idxB ? [idxA, 2] : [idxB, 4];
+      };
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        while (true) {
+          const [sep, sepLen] = splitFrame(buffer);
+          if (sep === -1) break;
+          const raw = buffer.slice(0, sep);
+          buffer = buffer.slice(sep + sepLen);
+          let eventName = "message";
+          let data = "";
+          for (const line of raw.split(/\r?\n/)) {
+            if (line.startsWith(":")) continue; // comment / keepalive
+            if (line.startsWith("event:")) eventName = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += line.slice(5).trim();
+          }
+          console.log("[SSE]", eventName, data.slice(0, 120));
+          if (!data) continue;
+          let payload;
+          try { payload = JSON.parse(data); } catch (err) {
+            console.warn("[SSE] JSON parse failed:", err, data);
+            continue;
+          }
+
+          if (eventName === "session") {
+            sessionIdLocal = payload.session_id;
+            if (!currentSessionId) setCurrentSessionId(payload.session_id);
+          } else if (eventName === "thinking") {
+            setStreaming((s) => s && { ...s, thinking: s.thinking + (payload.delta || "") });
+          } else if (eventName === "tool_start") {
+            setStreaming((s) => s && {
+              ...s,
+              toolCalls: [...s.toolCalls, { name: payload.name, done: false, point_count: 0 }],
+            });
+          } else if (eventName === "tool_done") {
+            setStreaming((s) => {
+              if (!s) return s;
+              const calls = [...s.toolCalls];
+              // Mark the first still-pending call with this name as done
+              const idx = calls.findIndex((c) => c.name === payload.name && !c.done);
+              if (idx >= 0) {
+                calls[idx] = { ...calls[idx], done: true, point_count: payload.point_count };
+              } else {
+                calls.push({ name: payload.name, done: true, point_count: payload.point_count });
+              }
+              return { ...s, toolCalls: calls };
+            });
+          } else if (eventName === "message") {
+            setStreaming((s) => s && { ...s, message: s.message + (payload.delta || "") });
+          } else if (eventName === "final") {
+            finalPayload = payload;
+          } else if (eventName === "error") {
+            throw new Error(payload.error || "AI error");
+          }
+        }
+      }
+
+      if (!finalPayload) throw new Error("Stream ended without a final pattern");
+
       const aiMsg = {
-        id: data.message_id,
+        id: `ai-${Date.now()}`,
         role: "assistant",
-        content: data.message,
-        ai_message: data.message,
-        pattern_name: data.pattern_name,
-        point_data: data.point_data,
-        python_code: data.python_code,
+        content: finalPayload.message,
+        ai_message: finalPayload.message,
+        pattern_name: finalPayload.pattern_name,
+        point_data: finalPayload.point_data,
+        scenes: finalPayload.scenes,
+        durations_ms: finalPayload.durations_ms,
+        animated: finalPayload.animated,
+        python_code: "",
         created_at: new Date().toISOString(),
       };
       setMessages((prev) => [...prev, aiMsg]);
       loadSessions();
     } catch (e) {
-      toast.error(e.response?.data?.detail || "Failed to send message");
+      toast.error(e.message || "Failed to send message");
       setMessages((prev) => prev.filter((m) => m.id !== tempUserMsg.id));
     } finally {
+      setStreaming(null);
       setLoading(false);
     }
   };
@@ -446,19 +665,7 @@ const AIBuilder = ({ sdkStatus }) => {
               messages.map((msg) => <ChatMessageItem key={msg.id} message={msg} />)
             )}
 
-            {loading && (
-              <div className="flex gap-3">
-                <div className="w-8 h-8 rounded-full bg-blue-600/20 border border-blue-500/30 flex items-center justify-center flex-shrink-0">
-                  <Bot className="w-4 h-4 text-blue-400" />
-                </div>
-                <div className="bg-[#1A1A1A] border border-white/10 rounded-2xl rounded-tl-sm px-4 py-3">
-                  <div className="flex items-center gap-2">
-                    <Loader2 className="w-4 h-4 text-green-500 animate-spin" />
-                    <span className="text-sm text-zinc-400">Generating laser pattern...</span>
-                  </div>
-                </div>
-              </div>
-            )}
+            {streaming && <StreamingMessage streaming={streaming} />}
 
             <div ref={messagesEndRef} />
           </div>
