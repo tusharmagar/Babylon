@@ -3,7 +3,8 @@ import "@/App.css";
 import axios from "axios";
 import {
   Settings, Power, Square, AlertTriangle, Terminal, Wifi, WifiOff,
-  Trash2, Cpu, LayoutGrid, Zap, ZapOff, Music,
+  Trash2, Cpu, LayoutGrid, Zap, ZapOff, Music, Library as LibraryIcon,
+  Image as ImageIcon,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { toast } from "sonner";
 import AIBuilder from "@/components/AIBuilder";
 import SongToLaser from "@/components/SongToLaser";
+import Library from "@/components/Library";
+import GifLibrary from "@/components/GifLibrary";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || "http://localhost:8001";
 const API = `${BACKEND_URL}/api`;
@@ -335,6 +338,18 @@ function App() {
             >
               <Music className="w-4 h-4" /> Song to Laser
             </TabsTrigger>
+            <TabsTrigger
+              value="library"
+              className="data-[state=active]:bg-green-600 data-[state=active]:text-white text-zinc-400 px-4 py-2 rounded-md text-sm font-semibold transition-all gap-2"
+            >
+              <LibraryIcon className="w-4 h-4" /> Library
+            </TabsTrigger>
+            <TabsTrigger
+              value="gifs"
+              className="data-[state=active]:bg-green-600 data-[state=active]:text-white text-zinc-400 px-4 py-2 rounded-md text-sm font-semibold transition-all gap-2"
+            >
+              <ImageIcon className="w-4 h-4" /> GIFs
+            </TabsTrigger>
           </TabsList>
 
           {/* ===== Cues Tab ===== */}
@@ -425,6 +440,16 @@ function App() {
           {/* ===== Song to Laser Tab ===== */}
           <TabsContent value="song-to-laser">
             <SongToLaser />
+          </TabsContent>
+
+          {/* ===== Library Tab ===== */}
+          <TabsContent value="library">
+            <Library />
+          </TabsContent>
+
+          {/* ===== GIFs Tab ===== */}
+          <TabsContent value="gifs">
+            <GifLibrary />
           </TabsContent>
         </Tabs>
       </main>
