@@ -1,5 +1,6 @@
 from fastapi import FastAPI, APIRouter, HTTPException
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from sse_starlette.sse import EventSourceResponse
@@ -1199,6 +1200,33 @@ async def video_stream(request: VideoStreamRequest):
         "video_path": str(video_path),
         "audio_path": str(audio_path),
     }
+
+
+# ===== SAM 3 + ILDA export =====
+from sam3_routes import sam3_router, laser_export_router
+from stroke_routes import stroke_router
+
+app.include_router(sam3_router)
+app.include_router(laser_export_router)
+app.include_router(stroke_router)
+
+# Serve the SAM 3 mask cache so the browser can fetch per-frame PNGs.
+SAM3_CACHE_DIR = ROOT_DIR / "sam3_cache"
+SAM3_CACHE_DIR.mkdir(exist_ok=True)
+app.mount("/sam3_cache", StaticFiles(directory=str(SAM3_CACHE_DIR)), name="sam3_cache")
+
+STROKE_VIDEO_CACHE_DIR = ROOT_DIR / "stroke_video_cache"
+STROKE_VIDEO_CACHE_DIR.mkdir(exist_ok=True)
+app.mount("/stroke_video_cache", StaticFiles(directory=str(STROKE_VIDEO_CACHE_DIR)), name="stroke_video_cache")
+
+
+# Serve the edge visualizer HTML directly so a single uvicorn covers everything.
+@app.get("/edge-visualizer")
+async def serve_edge_visualizer():
+    html = ROOT_DIR.parent / "edge_visualizer.html"
+    if not html.exists():
+        raise HTTPException(status_code=404, detail="edge_visualizer.html not found")
+    return FileResponse(str(html), media_type="text/html")
 
 
 # ===== Wire Up =====

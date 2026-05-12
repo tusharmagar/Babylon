@@ -1,0 +1,2779 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Edge Detection Visualizer — ratvideo</title>
+<style>
+  :root {
+    --bg: #0b0b0e;
+    --panel: #15161b;
+    --border: #2a2c34;
+    --text: #e6e6ec;
+    --muted: #8a8d99;
+    --accent: #7cf2c0;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    -webkit-font-smoothing: antialiased;
+  }
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    flex-wrap: wrap; gap: 12px;
+  }
+  header h1 { font-size: 14px; margin: 0; letter-spacing: 0.5px; }
+  header .meta { color: var(--muted); font-size: 12px; }
+  #status {
+    color: var(--muted); font-size: 12px;
+  }
+  #status.ready { color: var(--accent); }
+
+  .controls-bar {
+    display: flex; gap: 12px; align-items: center;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  .controls-bar input[type=file] { color: var(--muted); font-family: inherit; font-size: 12px; }
+  .controls-bar button {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); padding: 6px 12px;
+    font-family: inherit; font-size: 12px; cursor: pointer;
+    border-radius: 4px;
+  }
+  .controls-bar button:hover { border-color: var(--accent); }
+
+  select {
+    background: #0b0b0e; color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 3px 6px; font-family: inherit; font-size: 11px;
+  }
+  .step-badge {
+    background: #1f2128; color: var(--accent);
+    padding: 2px 6px; border-radius: 3px; font-size: 10px;
+    letter-spacing: 0.5px; margin-right: 6px;
+  }
+  .panel-actions {
+    padding: 8px 12px; border-top: 1px solid var(--border);
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }
+  .panel-actions button {
+    background: #0b0b0e; color: var(--text);
+    border: 1px solid var(--border); padding: 5px 10px;
+    font-family: inherit; font-size: 11px; cursor: pointer;
+    border-radius: 3px;
+  }
+  .panel-actions button:hover { border-color: var(--accent); }
+  .panel-actions button.primary {
+    background: var(--accent); color: #0b0b0e; border-color: var(--accent); font-weight: 600;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 12px;
+    padding: 12px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex; flex-direction: column;
+  }
+  .panel-title {
+    padding: 10px 12px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center;
+    color: var(--muted);
+  }
+  .panel-title strong { color: var(--text); }
+  .panel canvas {
+    width: 100%; height: auto; display: block;
+    background: #000;
+  }
+  .panel .sliders {
+    padding: 10px 12px;
+    border-top: 1px solid var(--border);
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .slider-row {
+    display: grid;
+    grid-template-columns: 110px 1fr 50px;
+    gap: 10px; align-items: center;
+    font-size: 11px; color: var(--muted);
+  }
+  .slider-row input[type=range] {
+    width: 100%; accent-color: var(--accent);
+  }
+  .slider-row .val { color: var(--text); text-align: right; }
+  video { display: none; }
+
+  /* ---------- SAM control bar ---------- */
+  .sam-bar {
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 10px;
+    background: #101116;
+  }
+  .sam-row {
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    font-size: 12px; color: var(--muted);
+  }
+  .sam-row label { color: var(--muted); }
+  .sam-row input[type=text],
+  .sam-row input[type=number] {
+    background: #0b0b0e; color: var(--text);
+    border: 1px solid var(--border); border-radius: 3px;
+    padding: 5px 8px; font-family: inherit; font-size: 12px;
+  }
+  .sam-row input.path { width: 360px; }
+  .sam-row button {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); padding: 5px 12px;
+    font-family: inherit; font-size: 12px; cursor: pointer;
+    border-radius: 3px;
+  }
+  .sam-row button:hover { border-color: var(--accent); }
+  .sam-row button.primary { background: var(--accent); color: #0b0b0e; border-color: var(--accent); font-weight: 600; }
+  #sam-progress {
+    flex: 1; min-width: 200px; height: 6px; background: #1f2128; border-radius: 3px; overflow: hidden;
+  }
+  #sam-progress > div { height: 100%; background: var(--accent); width: 0%; transition: width 0.3s ease; }
+  .sam-status { color: var(--accent); font-size: 11px; }
+  .sam-status.err { color: #ff6b6b; }
+  .toggle {
+    display: inline-flex; gap: 6px; align-items: center;
+    cursor: pointer; user-select: none;
+  }
+  .toggle input { accent-color: var(--accent); }
+
+  /* first-frame bbox picker */
+  #bbox-modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+    display: none; align-items: center; justify-content: center;
+    z-index: 100;
+  }
+  #bbox-modal.show { display: flex; }
+  #bbox-modal .inner {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 16px; max-width: 90vw; max-height: 90vh; display: flex; flex-direction: column; gap: 10px;
+  }
+  #bbox-canvas-wrap { position: relative; cursor: crosshair; }
+  #bbox-canvas { display: block; max-width: 80vw; max-height: 70vh; }
+  #bbox-modal .row { display: flex; gap: 10px; align-items: center; font-size: 12px; color: var(--muted); }
+
+  .panel.optional { opacity: 0.55; }
+  .panel.optional.active { opacity: 1; }
+  .step-badge.optional { background: #2a1f0e; color: #ffb84d; }
+  .step-badge.either { background: #1a2a1f; color: #7cf2c0; }
+  .step-badge.stroke { background: #2b1432; color: #d18bff; }
+
+  .parts-list { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 12px; border-top: 1px solid var(--border); }
+  .part-chip {
+    font-size: 10px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 12px;
+    cursor: pointer; user-select: none; display: inline-flex; align-items: center; gap: 4px;
+  }
+  .part-chip .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+  .part-chip.off { opacity: 0.35; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>EDGE DETECTION + SAM 3 VISUALIZER</h1>
+  <div class="meta">video → SAM mask → edge or contour → polylines → ILDA</div>
+  <div id="status">loading opencv.js...</div>
+</header>
+
+<div class="controls-bar">
+  <label style="font-size:12px;color:var(--muted);">video:</label>
+  <input id="filePicker" type="file" accept="video/*,image/*" />
+  <button id="playPause">pause</button>
+  <button id="restart">restart</button>
+  <button id="muteToggle" title="toggle audio">🔇 unmute</button>
+  <input type="range" id="volume" min="0" max="100" value="80" style="width:90px" title="volume" />
+  <span style="font-size:11px;color:var(--muted);" id="dims"></span>
+</div>
+
+<!-- ===================== SAM 3 control bar ===================== -->
+<div class="sam-bar">
+  <div class="sam-row">
+    <label><span class="step-badge optional">STEP 1.5</span><strong style="color:var(--text)">SAM 3</strong> — optional object isolation</label>
+    <span id="api-base-display" style="font-size:11px;">api: <span id="api-base-val">http://localhost:8001</span></span>
+    <button id="api-base-edit">edit api url</button>
+  </div>
+  <div class="sam-row">
+    <label>video:</label>
+    <input id="sam-file-picker" type="file" accept="video/*,image/*" style="display:none" />
+    <button id="sam-choose-file" class="primary">choose file…</button>
+    <span id="sam-file-name" style="font-size:11px;color:var(--text)">no file selected</span>
+    <input id="sam-path" type="hidden" />
+    <span id="sam-upload-progress" style="font-size:11px;color:var(--accent)"></span>
+  </div>
+  <div class="sam-row">
+    <label>prompt:</label>
+    <select id="sam-prompt-type">
+      <option value="bbox" selected>bbox (draw on first frame)</option>
+      <option value="text">text concept</option>
+    </select>
+    <input id="sam-text" type="text" placeholder='e.g. "rat" or "person"' style="width:240px;display:none" />
+    <input id="sam-bbox" type="text" placeholder="x1,y1,x2,y2 (auto-filled by drawing)" style="width:220px" />
+    <button id="sam-pick-bbox">draw bbox on first frame</button>
+  </div>
+  <div class="sam-row">
+    <label>parts (optional, comma-separated):</label>
+    <input id="sam-parts" type="text" placeholder='e.g. "head, body, tail"' style="width:300px" />
+    <label>imgsz:</label>
+    <input id="sam-imgsz" type="number" min="320" max="1536" step="32" value="640" style="width:80px" />
+    <label>every-n:</label>
+    <input id="sam-stride" type="number" min="1" max="10" step="1" value="1" style="width:60px" />
+  </div>
+  <div class="sam-row">
+    <button id="sam-process" class="primary">process video with SAM 3</button>
+    <span id="sam-media-pill" style="font-size:11px;color:var(--muted)"></span>
+    <span id="stroke-status" style="font-size:11px;color:var(--muted)">stroke art: tune in each card → click "process this"</span>
+    <div id="stroke-video-progress" style="flex:1;min-width:120px;height:6px;background:#1f2128;border-radius:3px;overflow:hidden;display:none">
+      <div style="height:100%;background:#d18bff;width:0%;transition:width 0.3s ease"></div>
+    </div>
+    <div id="sam-progress"><div></div></div>
+    <span id="sam-progress-text" class="sam-status">idle</span>
+    <button id="sam-cancel" style="display:none">cancel</button>
+  </div>
+  <div class="sam-row">
+    <span class="toggle"><input type="checkbox" id="sam-enable" disabled /> enable SAM mask</span>
+    <span class="toggle"><input type="checkbox" id="sam-gate-edges" disabled /> isolate to SAM region (mask edges, polylines)</span>
+    <label>mask dilate:</label>
+    <input type="range" id="sam-dilate" min="0" max="20" value="0" style="width:120px" />
+    <span id="sam-dilate-v" style="color:var(--text)">0</span>
+    <label>mask feather:</label>
+    <input type="range" id="sam-feather" min="0" max="20" value="0" style="width:120px" />
+    <span id="sam-feather-v" style="color:var(--text)">0</span>
+  </div>
+</div>
+
+<!-- bbox draw modal -->
+<div id="bbox-modal">
+  <div class="inner">
+    <div class="row"><strong style="color:var(--text)">draw a bounding box on the first frame</strong></div>
+    <div id="bbox-canvas-wrap">
+      <canvas id="bbox-canvas"></canvas>
+    </div>
+    <div class="row">
+      <span id="bbox-coords">no bbox</span>
+      <button id="bbox-cancel">cancel</button>
+      <button id="bbox-confirm" class="primary">use this bbox</button>
+    </div>
+  </div>
+</div>
+
+<div class="grid">
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge">STEP 1</span><strong>ORIGINAL</strong><span>source</span></div>
+    <canvas id="cv-original"></canvas>
+  </div>
+
+  <div class="panel optional" id="panel-sam">
+    <div class="panel-title"><span class="step-badge optional">STEP 1.5</span><strong>SAM MASK</strong><span>tracked object · optional</span></div>
+    <canvas id="cv-sam"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>preview mode</span>
+        <select id="sam-preview-mode">
+          <option value="overlay" selected>overlay on frame</option>
+          <option value="binary">binary mask</option>
+          <option value="masked">masked frame (background black)</option>
+        </select>
+        <span class="val">&nbsp;</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel optional" id="panel-parts">
+    <div class="panel-title"><span class="step-badge optional">STEP 1.6</span><strong>SAM PARTS</strong><span>internal features · optional</span></div>
+    <canvas id="cv-parts"></canvas>
+    <div class="parts-list" id="parts-list"><span style="font-size:11px;color:var(--muted)">no parts loaded — list parts in the SAM bar then process.</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge">STEP 2</span><strong>CANNY</strong><span>hysteresis thresholding</span></div>
+    <canvas id="cv-canny"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>low threshold</span>
+        <input type="range" id="canny-low" min="0" max="255" value="50" />
+        <span class="val" id="canny-low-v">50</span>
+      </div>
+      <div class="slider-row">
+        <span>high threshold</span>
+        <input type="range" id="canny-high" min="0" max="255" value="150" />
+        <span class="val" id="canny-high-v">150</span>
+      </div>
+      <div class="slider-row">
+        <span>blur sigma</span>
+        <input type="range" id="canny-blur" min="0" max="50" value="14" />
+        <span class="val" id="canny-blur-v">1.4</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge">STEP 2</span><strong>SOBEL</strong><span>1st-order gradient</span></div>
+    <canvas id="cv-sobel"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>kernel size</span>
+        <input type="range" id="sobel-k" min="1" max="3" step="1" value="2" />
+        <span class="val" id="sobel-k-v">3</span>
+      </div>
+      <div class="slider-row">
+        <span>intensity</span>
+        <input type="range" id="sobel-scale" min="10" max="500" value="100" />
+        <span class="val" id="sobel-scale-v">1.0</span>
+      </div>
+      <div class="slider-row">
+        <span>threshold</span>
+        <input type="range" id="sobel-thresh" min="0" max="255" value="0" />
+        <span class="val" id="sobel-thresh-v">0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge">STEP 2</span><strong>LAPLACIAN</strong><span>2nd-order, omnidirectional</span></div>
+    <canvas id="cv-lap"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>kernel size</span>
+        <input type="range" id="lap-k" min="1" max="4" step="1" value="2" />
+        <span class="val" id="lap-k-v">3</span>
+      </div>
+      <div class="slider-row">
+        <span>intensity</span>
+        <input type="range" id="lap-scale" min="10" max="500" value="100" />
+        <span class="val" id="lap-scale-v">1.0</span>
+      </div>
+      <div class="slider-row">
+        <span>pre-blur</span>
+        <input type="range" id="lap-blur" min="0" max="50" value="10" />
+        <span class="val" id="lap-blur-v">1.0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge">STEP 2</span><strong>SCHARR</strong><span>optimized 3×3 gradient</span></div>
+    <canvas id="cv-scharr"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>intensity</span>
+        <input type="range" id="scharr-scale" min="10" max="500" value="100" />
+        <span class="val" id="scharr-scale-v">1.0</span>
+      </div>
+      <div class="slider-row">
+        <span>threshold</span>
+        <input type="range" id="scharr-thresh" min="0" max="255" value="0" />
+        <span class="val" id="scharr-thresh-v">0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge">STEP 2</span><strong>NEON RIDGE</strong><span>single-line per stroke · real-time</span></div>
+    <canvas id="cv-ridge"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>scale (σ)</span>
+        <input type="range" id="ridge-sigma" min="5" max="80" value="20" />
+        <span class="val" id="ridge-sigma-v">2.0</span>
+      </div>
+      <div class="slider-row">
+        <span>threshold</span>
+        <input type="range" id="ridge-thr" min="1" max="200" value="40" />
+        <span class="val" id="ridge-thr-v">0.040</span>
+      </div>
+      <div class="slider-row">
+        <span>thinning</span>
+        <input type="range" id="ridge-thin" min="0" max="3" value="0" />
+        <span class="val" id="ridge-thin-v">0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge">STEP 3</span><strong>COLORIZED</strong><span>edge × source color</span></div>
+    <canvas id="cv-color"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>source</span>
+        <select id="color-src">
+          <option value="canny" selected>canny</option>
+          <option value="sobel">sobel</option>
+          <option value="lap">laplacian</option>
+          <option value="scharr">scharr</option>
+          <option value="neon">neon ridge</option>
+        </select>
+        <span class="val">&nbsp;</span>
+      </div>
+      <div class="slider-row">
+        <span>binarize thresh</span>
+        <input type="range" id="color-bin" min="0" max="255" value="60" />
+        <span class="val" id="color-bin-v">60</span>
+      </div>
+      <div class="slider-row">
+        <span>black cutoff</span>
+        <input type="range" id="color-black" min="0" max="255" value="40" />
+        <span class="val" id="color-black-v">40</span>
+      </div>
+      <div class="slider-row">
+        <span>saturation</span>
+        <input type="range" id="color-sat" min="50" max="300" value="140" />
+        <span class="val" id="color-sat-v">1.40</span>
+      </div>
+      <div class="slider-row">
+        <span>thickness</span>
+        <input type="range" id="color-thick" min="0" max="5" value="1" />
+        <span class="val" id="color-thick-v">1</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge either">STEP 4</span><strong>POLYLINES</strong><span>vector paths · inherits Step 3</span></div>
+    <canvas id="cv-poly"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>follow Step 3</span>
+        <label class="toggle" style="justify-self:start"><input type="checkbox" id="poly-follow" checked /> source · binarize · cutoff · saturation</label>
+        <span class="val">&nbsp;</span>
+      </div>
+      <div class="slider-row">
+        <span>source (override)</span>
+        <select id="poly-src">
+          <option value="canny" selected>canny</option>
+          <option value="sobel">sobel</option>
+          <option value="lap">laplacian</option>
+          <option value="scharr">scharr</option>
+          <option value="neon">neon ridge</option>
+          <option value="sam">SAM mask outline</option>
+          <option value="sam_parts">SAM parts outlines</option>
+        </select>
+        <span class="val">&nbsp;</span>
+      </div>
+      <div class="slider-row">
+        <span>binarize (override)</span>
+        <input type="range" id="poly-bin" min="0" max="255" value="60" />
+        <span class="val" id="poly-bin-v">60</span>
+      </div>
+      <div class="slider-row">
+        <span>black cutoff (override)</span>
+        <input type="range" id="poly-black" min="0" max="255" value="40" />
+        <span class="val" id="poly-black-v">40</span>
+      </div>
+      <div class="slider-row">
+        <span>color sample</span>
+        <select id="poly-color-mode">
+          <option value="centroid" selected>from inside (skin/body)</option>
+          <option value="midpoint">from edge (midpoint)</option>
+          <option value="sam_avg">SAM region average</option>
+          <option value="uniform">uniform (pick a color)</option>
+        </select>
+        <span class="val">&nbsp;</span>
+      </div>
+      <div class="slider-row" id="poly-uniform-row" style="display:none">
+        <span>uniform color</span>
+        <input type="color" id="poly-uniform-color" value="#7cf2c0" style="height:24px;border:1px solid var(--border);background:#0b0b0e;border-radius:3px" />
+        <span class="val">&nbsp;</span>
+      </div>
+      <div class="slider-row">
+        <span>simplify ε (px)</span>
+        <input type="range" id="poly-eps" min="0" max="100" value="15" />
+        <span class="val" id="poly-eps-v">1.5</span>
+      </div>
+      <div class="slider-row">
+        <span>min points</span>
+        <input type="range" id="poly-min" min="2" max="50" value="4" />
+        <span class="val" id="poly-min-v">4</span>
+      </div>
+      <div class="slider-row">
+        <span>max polylines</span>
+        <input type="range" id="poly-max" min="10" max="500" value="120" />
+        <span class="val" id="poly-max-v">120</span>
+      </div>
+      <div class="slider-row">
+        <span>line width</span>
+        <input type="range" id="poly-lw" min="1" max="6" value="2" />
+        <span class="val" id="poly-lw-v">2</span>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button id="poly-export">export frame JSON</button>
+      <button id="poly-ild" class="primary">download .ild</button>
+      <button id="poly-stream">stream to console (start)</button>
+      <span id="poly-stats" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center;"></span>
+    </div>
+  </div>
+
+  <!-- ===================== STROKE-ART CENTERLINE PANELS ===================== -->
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge stroke">STROKE A</span><strong>SKELETONIZE</strong><span>brightness mask · medial axis</span></div>
+    <canvas id="cv-stroke-skeleton"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>brightness ≥</span>
+        <input type="range" id="skeleton-thr" min="0" max="255" value="90" />
+        <span class="val" id="skeleton-thr-v">90</span>
+      </div>
+      <div class="slider-row">
+        <span>min length</span>
+        <input type="range" id="skeleton-minlen" min="2" max="60" value="12" />
+        <span class="val" id="skeleton-minlen-v">12</span>
+      </div>
+      <div class="slider-row">
+        <span>prune branches</span>
+        <input type="range" id="skeleton-prune" min="0" max="30" value="8" />
+        <span class="val" id="skeleton-prune-v">8</span>
+      </div>
+      <div class="slider-row">
+        <span>morph close</span>
+        <input type="range" id="skeleton-morph" min="0" max="10" value="3" />
+        <span class="val" id="skeleton-morph-v">3</span>
+      </div>
+      <div class="slider-row">
+        <span>simplify ε</span>
+        <input type="range" id="skeleton-eps" min="0" max="100" value="15" />
+        <span class="val" id="skeleton-eps-v">1.5</span>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button class="primary" data-stroke-process="skeleton">process image</button>
+      <button data-stroke-process-video="skeleton">process video</button>
+      <button id="stroke-skeleton-ild" disabled>download .ild</button>
+      <button id="stroke-skeleton-json" disabled>export JSON</button>
+      <span id="stroke-skeleton-stats" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center;">no run yet</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge stroke">STROKE B</span><strong>PER-COLOR CENTERLINE</strong><span>k-means buckets · per-color skeleton</span></div>
+    <canvas id="cv-stroke-percolor"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>brightness ≥</span>
+        <input type="range" id="percolor-thr" min="0" max="255" value="30" />
+        <span class="val" id="percolor-thr-v">30</span>
+      </div>
+      <div class="slider-row">
+        <span>k colors</span>
+        <input type="range" id="percolor-ncolors" min="2" max="10" value="5" />
+        <span class="val" id="percolor-ncolors-v">5</span>
+      </div>
+      <div class="slider-row">
+        <span>min length</span>
+        <input type="range" id="percolor-minlen" min="2" max="60" value="15" />
+        <span class="val" id="percolor-minlen-v">15</span>
+      </div>
+      <div class="slider-row">
+        <span>prune branches</span>
+        <input type="range" id="percolor-prune" min="0" max="30" value="6" />
+        <span class="val" id="percolor-prune-v">6</span>
+      </div>
+      <div class="slider-row">
+        <span>morph close</span>
+        <input type="range" id="percolor-morph" min="0" max="10" value="3" />
+        <span class="val" id="percolor-morph-v">3</span>
+      </div>
+      <div class="slider-row">
+        <span>simplify ε</span>
+        <input type="range" id="percolor-eps" min="0" max="100" value="15" />
+        <span class="val" id="percolor-eps-v">1.5</span>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button class="primary" data-stroke-process="per_color">process image</button>
+      <button id="stroke-percolor-ild" disabled>download .ild</button>
+      <button id="stroke-percolor-json" disabled>export JSON</button>
+      <span id="stroke-percolor-stats" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center;">no run yet</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge stroke">STROKE C</span><strong>POTRACE</strong><span>smooth bezier outline (per color)</span></div>
+    <canvas id="cv-stroke-potrace"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>brightness ≥</span>
+        <input type="range" id="potrace-thr" min="0" max="255" value="90" />
+        <span class="val" id="potrace-thr-v">90</span>
+      </div>
+      <div class="slider-row">
+        <span>k colors</span>
+        <input type="range" id="potrace-ncolors" min="2" max="10" value="5" />
+        <span class="val" id="potrace-ncolors-v">5</span>
+      </div>
+      <div class="slider-row">
+        <span>morph close</span>
+        <input type="range" id="potrace-morph" min="0" max="10" value="3" />
+        <span class="val" id="potrace-morph-v">3</span>
+      </div>
+      <div class="slider-row">
+        <span>simplify ε</span>
+        <input type="range" id="potrace-eps" min="0" max="100" value="15" />
+        <span class="val" id="potrace-eps-v">1.5</span>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button class="primary" data-stroke-process="potrace">process image</button>
+      <button id="stroke-potrace-ild" disabled>download .ild</button>
+      <button id="stroke-potrace-json" disabled>export JSON</button>
+      <span id="stroke-potrace-stats" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center;">no run yet</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge stroke">STROKE D</span><strong>NEON RIDGE</strong><span>neon-on-black single-line detector</span></div>
+    <canvas id="cv-stroke-neon"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>min length</span>
+        <input type="range" id="neon-minlen" min="2" max="60" value="12" />
+        <span class="val" id="neon-minlen-v">12</span>
+      </div>
+      <div class="slider-row">
+        <span>prune branches</span>
+        <input type="range" id="neon-prune" min="0" max="30" value="4" />
+        <span class="val" id="neon-prune-v">4</span>
+      </div>
+      <div class="slider-row">
+        <span>simplify ε</span>
+        <input type="range" id="neon-eps" min="0" max="100" value="15" />
+        <span class="val" id="neon-eps-v">1.5</span>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button class="primary" data-stroke-process="neon">process image</button>
+      <button data-stroke-process-video="neon">process video</button>
+      <button id="stroke-neon-ild" disabled>download .ild</button>
+      <button id="stroke-neon-json" disabled>export JSON</button>
+      <span id="stroke-neon-stats" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center;">no run yet</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-title"><span class="step-badge stroke">STROKE E</span><strong>COLOR-SPLIT POLYLINES</strong><span>real-time · matches colorized</span></div>
+    <canvas id="cv-stroke-csplit"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>source</span>
+        <select id="csplit-src">
+          <option value="canny">canny</option>
+          <option value="sobel">sobel</option>
+          <option value="lap">laplacian</option>
+          <option value="scharr">scharr</option>
+          <option value="neon" selected>neon ridge</option>
+        </select>
+        <span class="val">&nbsp;</span>
+      </div>
+      <div class="slider-row">
+        <span>color split (ΔE)</span>
+        <input type="range" id="csplit-delta" min="5" max="120" value="40" />
+        <span class="val" id="csplit-delta-v">40</span>
+      </div>
+      <div class="slider-row">
+        <span>sample stride (px)</span>
+        <input type="range" id="csplit-stride" min="1" max="20" value="4" />
+        <span class="val" id="csplit-stride-v">4</span>
+      </div>
+      <div class="slider-row">
+        <span>line width</span>
+        <input type="range" id="csplit-lw" min="1" max="6" value="2" />
+        <span class="val" id="csplit-lw-v">2</span>
+      </div>
+      <div class="slider-row">
+        <span>glow</span>
+        <input type="range" id="csplit-glow" min="0" max="20" value="6" />
+        <span class="val" id="csplit-glow-v">6</span>
+      </div>
+      <div class="slider-row">
+        <span>min seg</span>
+        <input type="range" id="csplit-minseg" min="2" max="20" value="3" />
+        <span class="val" id="csplit-minseg-v">3</span>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <span class="toggle"><input type="checkbox" id="csplit-on" checked /> live (per-frame)</span>
+      <button id="csplit-ild" class="primary" disabled>download .ild (frame)</button>
+      <button id="csplit-json" disabled>export JSON</button>
+      <span id="csplit-stats" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center;">no frame yet</span>
+    </div>
+  </div>
+
+  <div class="panel" id="panel-recorder">
+    <div class="panel-title"><span class="step-badge stroke">VIDEO ILDA</span><strong>RECORD WHOLE SHOW</strong><span>multi-frame .ild for Beyond</span></div>
+    <canvas id="cv-recorder"></canvas>
+    <div class="sliders">
+      <div class="slider-row">
+        <span>source</span>
+        <select id="rec-src">
+          <option value="poly" selected>Step 4 polylines</option>
+          <option value="csplit">Step E color-split</option>
+        </select>
+        <span class="val">&nbsp;</span>
+      </div>
+      <div class="slider-row">
+        <span>capture every</span>
+        <input type="range" id="rec-stride" min="1" max="10" value="1" />
+        <span class="val" id="rec-stride-v">1</span>
+      </div>
+      <div class="slider-row">
+        <span>max frames</span>
+        <input type="range" id="rec-maxf" min="30" max="3000" value="900" />
+        <span class="val" id="rec-maxf-v">900</span>
+      </div>
+    </div>
+    <div class="panel-actions">
+      <button id="rec-start" class="primary">⏺ start recording</button>
+      <button id="rec-stop" disabled>⏹ stop & download</button>
+      <span id="rec-stats" style="font-size:11px;color:var(--muted);margin-left:auto;align-self:center;">idle</span>
+    </div>
+  </div>
+
+</div>
+
+<video id="video" src="ratvideo.mov" autoplay muted loop playsinline crossorigin="anonymous"></video>
+
+<script>
+  // ---------- DOM hooks ----------
+  const video       = document.getElementById('video');
+  const statusEl    = document.getElementById('status');
+  const dimsEl      = document.getElementById('dims');
+  const playPauseBtn = document.getElementById('playPause');
+  const restartBtn  = document.getElementById('restart');
+  const filePicker  = document.getElementById('filePicker');
+
+  const canvases = {
+    original: document.getElementById('cv-original'),
+    sam:      document.getElementById('cv-sam'),
+    parts:    document.getElementById('cv-parts'),
+    canny:    document.getElementById('cv-canny'),
+    sobel:    document.getElementById('cv-sobel'),
+    lap:      document.getElementById('cv-lap'),
+    scharr:   document.getElementById('cv-scharr'),
+    ridge:    document.getElementById('cv-ridge'),
+    color:    document.getElementById('cv-color'),
+    poly:     document.getElementById('cv-poly'),
+    csplit:   document.getElementById('cv-stroke-csplit'),
+    recorder: document.getElementById('cv-recorder'),
+  };
+
+  // bind sliders + their value labels
+  function bind(id, fmt = v => v) {
+    const el = document.getElementById(id);
+    const out = document.getElementById(id + '-v');
+    const update = () => out.textContent = fmt(el.value);
+    el.addEventListener('input', update);
+    update();
+    return el;
+  }
+  const cannyLow   = bind('canny-low');
+  const cannyHigh  = bind('canny-high');
+  const cannyBlur  = bind('canny-blur', v => (v/10).toFixed(1));
+  const sobelK     = bind('sobel-k',     v => (parseInt(v)*2 + 1));
+  const sobelScale = bind('sobel-scale', v => (v/100).toFixed(2));
+  const sobelThr   = bind('sobel-thresh');
+  const lapK       = bind('lap-k',       v => (parseInt(v)*2 + 1));
+  const lapScale   = bind('lap-scale',   v => (v/100).toFixed(2));
+  const lapBlur    = bind('lap-blur',    v => (v/10).toFixed(1));
+  const scharrScale = bind('scharr-scale', v => (v/100).toFixed(2));
+  const scharrThr   = bind('scharr-thresh');
+  const ridgeSigma  = bind('ridge-sigma',   v => (v/10).toFixed(1));
+  const ridgeThr    = bind('ridge-thr',     v => (v/1000).toFixed(3));
+  const ridgeThin   = bind('ridge-thin');
+
+  const colorSrc    = document.getElementById('color-src');
+  const colorBin    = bind('color-bin');
+  const colorBlack  = bind('color-black');
+  const colorSat    = bind('color-sat',  v => (v/100).toFixed(2));
+  const colorThick  = bind('color-thick');
+
+  const polyFollow  = document.getElementById('poly-follow');
+  const polySrc     = document.getElementById('poly-src');
+  const polyBin     = bind('poly-bin');
+  const polyEps     = bind('poly-eps',   v => (v/10).toFixed(1));
+  const polyMin     = bind('poly-min');
+  const polyMax     = bind('poly-max');
+  const polyLw      = bind('poly-lw');
+  const polyBlack   = bind('poly-black');
+  const polyColorMode = document.getElementById('poly-color-mode');
+  const polyUniformColor = document.getElementById('poly-uniform-color');
+  const polyUniformRow = document.getElementById('poly-uniform-row');
+  polyColorMode.onchange = () => {
+    polyUniformRow.style.display = polyColorMode.value === 'uniform' ? '' : 'none';
+  };
+  const polyStats   = document.getElementById('poly-stats');
+  const polyExport  = document.getElementById('poly-export');
+  const polyStream  = document.getElementById('poly-stream');
+
+  // ---------- buttons ----------
+  playPauseBtn.onclick = () => {
+    if (video.paused) { video.play(); playPauseBtn.textContent = 'pause'; }
+    else              { video.pause(); playPauseBtn.textContent = 'play'; }
+  };
+  restartBtn.onclick = () => { video.currentTime = 0; video.play(); };
+
+  // Audio controls. Browsers require muted for autoplay; we start muted and
+  // let the user unmute on first click.
+  const muteBtn = document.getElementById('muteToggle');
+  const volumeSlider = document.getElementById('volume');
+  video.volume = parseInt(volumeSlider.value) / 100;
+  muteBtn.onclick = () => {
+    video.muted = !video.muted;
+    muteBtn.textContent = video.muted ? '🔇 unmute' : '🔊 mute';
+    if (!video.muted && video.paused) {
+      try { video.play().catch(() => {}); } catch (e) {}
+    }
+  };
+  volumeSlider.oninput = () => {
+    const v = parseInt(volumeSlider.value) / 100;
+    video.volume = v;
+    if (v > 0 && video.muted) {
+      video.muted = false;
+      muteBtn.textContent = '🔊 mute';
+    }
+  };
+  filePicker.onchange = e => {
+    const f = e.target.files[0];
+    if (!f) return;
+    video.src = URL.createObjectURL(f);
+    video.play();
+  };
+
+  // ---------- pipeline ----------
+  let cv;          // OpenCV.js handle
+  let MAT = {};    // reusable Mats
+  const TARGET_W = 480;  // downscale for performance (per-panel)
+
+  function onCvReady() {
+    statusEl.textContent = 'opencv ready · waiting for media';
+    statusEl.classList.add('ready');
+    if (currentSource instanceof HTMLImageElement) {
+      if (currentSource.complete && currentSource.naturalWidth > 0) startLoop();
+      else currentSource.addEventListener('load', () => startLoop(), { once: true });
+    } else if (video.readyState >= 2) startLoop();
+    else video.addEventListener('loadeddata', startLoop, { once: true });
+  }
+
+  function setupCanvases(w, h) {
+    Object.values(canvases).forEach(c => { c.width = w; c.height = h; });
+    dimsEl.textContent = `${w} × ${h}`;
+  }
+
+  // Active media source: video element by default; switched to <img> for image mode.
+  let currentSource = video;
+  let _loopRunning = false;
+  let _loopCleanup = null;
+
+  function _sourceDims(src) {
+    if (src instanceof HTMLImageElement) return [src.naturalWidth, src.naturalHeight];
+    return [src.videoWidth || 0, src.videoHeight || 0];
+  }
+
+  function restartLoop(newSource) {
+    if (_loopCleanup) { try { _loopCleanup(); } catch(e){} _loopCleanup = null; }
+    _loopRunning = false;
+    currentSource = newSource;
+    if (typeof cv === 'undefined' || !cv) return;  // defer until onCvReady
+    startLoop();
+  }
+
+  function startLoop() {
+    const [vw, vh] = _sourceDims(currentSource);
+    if (!vw || !vh) {
+      statusEl.textContent = 'source has no dimensions — pick a file';
+      return;
+    }
+    const scale = Math.min(1, TARGET_W / vw);
+    const w = Math.round(vw * scale);
+    const h = Math.round(vh * scale);
+    setupCanvases(w, h);
+    statusEl.textContent = `processing · ${w}×${h}`;
+
+    // allocate reusable Mats once
+    MAT.src      = new cv.Mat(h, w, cv.CV_8UC4);
+    MAT.src_rgb  = new cv.Mat();
+    MAT.gray     = new cv.Mat();
+    MAT.blur     = new cv.Mat();
+    MAT.gx       = new cv.Mat();
+    MAT.gy       = new cv.Mat();
+    MAT.mag      = new cv.Mat();
+    MAT.gx_abs   = new cv.Mat();
+    MAT.gy_abs   = new cv.Mat();
+    MAT.tmp      = new cv.Mat();
+    MAT.out      = new cv.Mat();
+    // per-algo edge cache (binary or magnitude)
+    MAT.edge_canny  = new cv.Mat();
+    MAT.edge_sobel  = new cv.Mat();
+    MAT.edge_lap    = new cv.Mat();
+    MAT.edge_scharr = new cv.Mat();
+    MAT.edge_neon   = new cv.Mat();
+    // Hessian + ridge scratch
+    MAT.ridge_blur  = new cv.Mat();
+    MAT.ridge_xx    = new cv.Mat();
+    MAT.ridge_yy    = new cv.Mat();
+    MAT.ridge_xy    = new cv.Mat();
+    MAT.ridge_resp  = new cv.Mat();
+    // colorize/polyline scratch
+    MAT.bin      = new cv.Mat();
+    MAT.mask3    = new cv.Mat();
+    MAT.colored  = new cv.Mat();
+    MAT.hsv      = new cv.Mat();
+    MAT.kernel   = cv.Mat.ones(3, 3, cv.CV_8U);
+
+    // draw video into a hidden canvas to read pixels
+    const grabCanvas = document.createElement('canvas');
+    grabCanvas.width = w; grabCanvas.height = h;
+    const grabCtx = grabCanvas.getContext('2d', { willReadFrequently: true });
+
+    // mask Mats — allocated once SAM is enabled, reused thereafter
+    MAT.sam_raw   = null;  // raw mask at panel size
+    MAT.sam_mask  = null;  // post dilate/feather, 0/255
+    MAT.gray_eff  = new cv.Mat();  // gray possibly gated by mask
+
+    _loopRunning = true;
+    _loopCleanup = () => {
+      _loopRunning = false;
+      // free per-loop Mats so a restart at new dims doesn't leak
+      ['src','src_rgb','gray','blur','gx','gy','mag','gx_abs','gy_abs','tmp','out',
+       'edge_canny','edge_sobel','edge_lap','edge_scharr','edge_neon','bin','mask3','colored','hsv','kernel',
+       'ridge_blur','ridge_xx','ridge_yy','ridge_xy','ridge_resp',
+       'sam_raw','sam_mask','gray_eff','gating_mask'].forEach(k => {
+        if (MAT[k] && typeof MAT[k].delete === 'function') {
+          try { MAT[k].delete(); } catch(e) {}
+        }
+        MAT[k] = null;
+      });
+      if (MAT.color_out) { try { MAT.color_out.delete(); } catch(e){} MAT.color_out = null; }
+      // Mask cache Mats are sized to the panel; they're stale after a resize.
+      try { freeMaskCaches(); } catch (e) {}
+    };
+
+    let _frameErrCount = 0;
+    function frame() {
+      if (!_loopRunning) return;  // loop was torn down; bail out
+      try {
+        _frameBody();
+      } catch (e) {
+        _frameErrCount++;
+        if (_frameErrCount === 1 || _frameErrCount % 60 === 0) {
+          console.warn('[frame] error #' + _frameErrCount, e);
+          statusEl.textContent = 'frame error: ' + (e && e.message ? e.message : e);
+        }
+      }
+      requestAnimationFrame(frame);
+    }
+    function _frameBody() {
+      const isImage = currentSource instanceof HTMLImageElement;
+      if (!isImage && (video.paused || video.ended)) return;
+      grabCtx.drawImage(currentSource, 0, 0, w, h);
+      const imgData = grabCtx.getImageData(0, 0, w, h);
+      MAT.src.data.set(imgData.data);
+
+      // --- ORIGINAL ---
+      cv.imshow(canvases.original, MAT.src);
+
+      // grayscale + RGB copies, reused downstream
+      cv.cvtColor(MAT.src, MAT.gray, cv.COLOR_RGBA2GRAY);
+      cv.cvtColor(MAT.src, MAT.src_rgb, cv.COLOR_RGBA2RGB);
+
+      // --- STEP 1.5 / 1.6: SAM ---
+      updateSamMaskForCurrentFrame(w, h);
+      drawSamPanel(w, h);
+      drawPartsPanel(w, h);
+
+      // Always build the union of the main mask + enabled part masks. This is
+      // the "selected region" — used for edge gating AND as the source for the
+      // SAM-mask polyline outline, so toggling a part chip affects both.
+      if (samState.enabled && MAT.sam_mask) {
+        if (!MAT.gating_mask) MAT.gating_mask = new cv.Mat();
+        MAT.sam_mask.copyTo(MAT.gating_mask);
+        for (const slug in samState.partMasks) {
+          if (!samState.partsEnabled[slug]) continue;
+          const m = samState.partMasks[slug];
+          if (m && m.rows === MAT.gating_mask.rows && m.cols === MAT.gating_mask.cols) {
+            cv.bitwise_or(MAT.gating_mask, m, MAT.gating_mask);
+          }
+        }
+      }
+
+      const gating = samState.enabled && samState.gateEdges && !!MAT.gating_mask;
+      if (gating) {
+        cv.bitwise_and(MAT.gray, MAT.gray, MAT.gray_eff, MAT.gating_mask);
+        if (!_maskInterior) _maskInterior = new cv.Mat();
+        const k = cv.Mat.ones(3, 3, cv.CV_8U);
+        cv.erode(MAT.gating_mask, _maskInterior, k, new cv.Point(-1, -1), 2);
+        k.delete();
+      } else {
+        MAT.gray.copyTo(MAT.gray_eff);
+      }
+      _gatingActive = gating;
+
+      processCanny(w, h);
+      processSobel(w, h);
+      processLaplacian(w, h);
+      processScharr(w, h);
+      processNeonRidge(w, h);
+      processColorize(w, h);
+      processPolylines(w, h);
+
+      // STROKE E (color-split) runs per-frame; matches colorized look.
+      if (typeof processColorSplit === 'function') processColorSplit(w, h);
+      // VIDEO ILDA recorder ticks every frame the video advances.
+      if (typeof _recorderTick === 'function') _recorderTick();
+      // If a stroke-video cache is loaded, animate the skeleton panel from it.
+      if (typeof _renderStrokeVideoFrame === 'function') _renderStrokeVideoFrame();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  function processCanny(w, h) {
+    const sigma = parseInt(cannyBlur.value) / 10;
+    if (sigma > 0) {
+      const k = Math.max(3, Math.round(sigma * 3) | 1);
+      cv.GaussianBlur(MAT.gray_eff, MAT.blur, new cv.Size(k, k), sigma, sigma);
+    } else {
+      MAT.gray_eff.copyTo(MAT.blur);
+    }
+    cv.Canny(MAT.blur, MAT.edge_canny,
+             parseInt(cannyLow.value),
+             parseInt(cannyHigh.value));
+    maskEdgeIfGating(MAT.edge_canny);
+    cv.imshow(canvases.canny, MAT.edge_canny);
+  }
+
+  function processSobel(w, h) {
+    const ks = parseInt(sobelK.value) * 2 + 1; // 3, 5, 7
+    const scale = parseInt(sobelScale.value) / 100;
+    const thr = parseInt(sobelThr.value);
+    cv.Sobel(MAT.gray_eff, MAT.gx, cv.CV_32F, 1, 0, ks, scale, 0);
+    cv.Sobel(MAT.gray_eff, MAT.gy, cv.CV_32F, 0, 1, ks, scale, 0);
+    cv.magnitude(MAT.gx, MAT.gy, MAT.mag);
+    MAT.mag.convertTo(MAT.edge_sobel, cv.CV_8U);
+    maskEdgeIfGating(MAT.edge_sobel);
+    if (thr > 0) {
+      cv.threshold(MAT.edge_sobel, MAT.out, thr, 255, cv.THRESH_BINARY);
+      cv.imshow(canvases.sobel, MAT.out);
+    } else {
+      cv.imshow(canvases.sobel, MAT.edge_sobel);
+    }
+  }
+
+  function processLaplacian(w, h) {
+    const ks = parseInt(lapK.value) * 2 + 1; // 1, 3, 5, 7 — kernel must be odd & positive
+    const scale = parseInt(lapScale.value) / 100;
+    const sigma = parseInt(lapBlur.value) / 10;
+    if (sigma > 0) {
+      const k = Math.max(3, Math.round(sigma * 3) | 1);
+      cv.GaussianBlur(MAT.gray_eff, MAT.blur, new cv.Size(k, k), sigma, sigma);
+    } else {
+      MAT.gray_eff.copyTo(MAT.blur);
+    }
+    cv.Laplacian(MAT.blur, MAT.tmp, cv.CV_32F, ks, scale, 0);
+    cv.convertScaleAbs(MAT.tmp, MAT.edge_lap);
+    maskEdgeIfGating(MAT.edge_lap);
+    cv.imshow(canvases.lap, MAT.edge_lap);
+  }
+
+  function processScharr(w, h) {
+    const scale = parseInt(scharrScale.value) / 100;
+    const thr = parseInt(scharrThr.value);
+    cv.Scharr(MAT.gray_eff, MAT.gx, cv.CV_32F, 1, 0, scale, 0);
+    cv.Scharr(MAT.gray_eff, MAT.gy, cv.CV_32F, 0, 1, scale, 0);
+    cv.convertScaleAbs(MAT.gx, MAT.gx_abs);
+    cv.convertScaleAbs(MAT.gy, MAT.gy_abs);
+    cv.addWeighted(MAT.gx_abs, 0.5, MAT.gy_abs, 0.5, 0, MAT.edge_scharr);
+    maskEdgeIfGating(MAT.edge_scharr);
+    if (thr > 0) {
+      cv.threshold(MAT.edge_scharr, MAT.out, thr, 255, cv.THRESH_BINARY);
+      cv.imshow(canvases.scharr, MAT.out);
+    } else {
+      cv.imshow(canvases.scharr, MAT.edge_scharr);
+    }
+  }
+
+  // ---- helpers for downstream stages ----
+
+  // STEP 2: NEON RIDGE — the "modified Canny" you wanted, in-browser.
+  //
+  // Idea: edge detection finds gradient *steps* (boundaries between regions),
+  // which gives two parallel lines around each thick stroke. Ridge detection
+  // finds bright *line-shaped* structures of arbitrary thickness, with a
+  // single response down the centerline.
+  //
+  // Implementation per scale σ:
+  //   1. Gaussian blur at σ
+  //   2. Hessian via Sobel: Ixx (∂²/∂x²), Iyy (∂²/∂y²), Ixy (∂²/∂x∂y)
+  //   3. Per-pixel eigenvalues of [[Ixx, Ixy], [Ixy, Iyy]]
+  //   4. Meijering ridge response: |λ_max| where λ_max < 0 (bright on dark)
+  //   5. Normalize to [0,1] and threshold
+  //
+  // Single-scale only, kept under ~10ms per 480px frame.
+  function processNeonRidge(w, h) {
+    const sigma = parseInt(ridgeSigma.value) / 10;
+    const thr = parseInt(ridgeThr.value) / 1000;
+    const thinIters = parseInt(ridgeThin.value);
+
+    // 1) Gaussian blur the gated gray input (σ)
+    const k = Math.max(3, Math.round(sigma * 3) | 1);
+    cv.GaussianBlur(MAT.gray_eff, MAT.ridge_blur, new cv.Size(k, k), sigma, sigma);
+
+    // 2) Hessian components via Sobel (CV_32F output)
+    cv.Sobel(MAT.ridge_blur, MAT.ridge_xx, cv.CV_32F, 2, 0, 3);
+    cv.Sobel(MAT.ridge_blur, MAT.ridge_yy, cv.CV_32F, 0, 2, 3);
+    cv.Sobel(MAT.ridge_blur, MAT.ridge_xy, cv.CV_32F, 1, 1, 3);
+
+    // 3+4) Per-pixel eigenvalue → Meijering response. Single tight loop on
+    //      the Float32 underlying buffers; no per-pixel allocation.
+    if (MAT.ridge_resp.rows !== h || MAT.ridge_resp.cols !== w || MAT.ridge_resp.type() !== cv.CV_32F) {
+      MAT.ridge_resp.delete();
+      MAT.ridge_resp = new cv.Mat(h, w, cv.CV_32F);
+    }
+    const xx = MAT.ridge_xx.data32F;
+    const yy = MAT.ridge_yy.data32F;
+    const xy = MAT.ridge_xy.data32F;
+    const out = MAT.ridge_resp.data32F;
+    const sigma2 = sigma * sigma;
+    const N = w * h;
+    let maxv = 0;
+    for (let i = 0; i < N; i++) {
+      const a = xx[i] * sigma2;
+      const b = xy[i] * sigma2;
+      const c = yy[i] * sigma2;
+      const tr = a + c;
+      const det = a * c - b * b;
+      const disc = Math.sqrt(Math.max(0, tr * tr - 4 * det));
+      const e1 = (tr + disc) * 0.5;
+      const e2 = (tr - disc) * 0.5;
+      const lmax = Math.abs(e1) > Math.abs(e2) ? e1 : e2;
+      const r = lmax < 0 ? -lmax : 0;
+      out[i] = r;
+      if (r > maxv) maxv = r;
+    }
+    if (maxv > 0) {
+      const inv = 1 / maxv;
+      for (let i = 0; i < N; i++) out[i] *= inv;
+    }
+
+    // 5) Threshold → CV_8U binary
+    cv.threshold(MAT.ridge_resp, MAT.tmp, thr, 255, cv.THRESH_BINARY);
+    MAT.tmp.convertTo(MAT.edge_neon, cv.CV_8U);
+
+    // Optional thinning (closes thin gaps + cleans 2-px artifacts)
+    if (thinIters > 0) {
+      const k3 = cv.Mat.ones(3, 3, cv.CV_8U);
+      cv.morphologyEx(MAT.edge_neon, MAT.edge_neon, cv.MORPH_CLOSE, k3, new cv.Point(-1, -1), thinIters);
+      k3.delete();
+    }
+
+    maskEdgeIfGating(MAT.edge_neon);
+    cv.imshow(canvases.ridge, MAT.edge_neon);
+  }
+
+  // Per-frame state set by frame(): the eroded mask (silhouette removed) and
+  // a flag the per-step processors use to decide whether to apply it.
+  let _maskInterior = null;
+  let _gatingActive = false;
+  function maskEdgeIfGating(edgeMat) {
+    if (_gatingActive && _maskInterior) {
+      cv.bitwise_and(edgeMat, _maskInterior, edgeMat);
+    }
+  }
+
+  function getEdgeMat(name) {
+    return ({
+      canny:  MAT.edge_canny,
+      sobel:  MAT.edge_sobel,
+      lap:    MAT.edge_lap,
+      scharr: MAT.edge_scharr,
+      neon:   MAT.edge_neon,
+    })[name] || MAT.edge_canny;
+  }
+
+  // Build a binary mask for contour extraction.
+  // For SAM sources, we feed the mask itself so findContours returns the silhouette.
+  // For edge sources, we feed the edge image (already thin lines).
+  function buildBinary(srcName, threshold, out) {
+    if (srcName === 'sam') {
+      // Use the union (main + enabled parts) so the polyline silhouette also
+      // includes parts the user has chipped on.
+      const src = MAT.gating_mask || MAT.sam_mask;
+      if (src) src.copyTo(out);
+      else out.setTo(new cv.Scalar(0));
+      return;
+    }
+    if (srcName === 'sam_parts') {
+      out.setTo(new cv.Scalar(0));
+      const parts = samState.partMasks || {};
+      for (const slug in parts) {
+        if (!samState.partsEnabled[slug]) continue;
+        const m = parts[slug];
+        if (m) cv.bitwise_or(out, m, out);
+      }
+      return;
+    }
+    const m = getEdgeMat(srcName);
+    if (srcName === 'canny' || srcName === 'neon') {
+      // Already 0/255; copy through.
+      m.copyTo(out);
+    } else {
+      cv.threshold(m, out, threshold, 255, cv.THRESH_BINARY);
+    }
+  }
+  function isSamSource(s) { return s === 'sam' || s === 'sam_parts'; }
+
+  // ---- STEP 3: COLORIZED EDGES ----
+  // Sample original color at edge pixels. If source pixel is "black"
+  // (luminance < cutoff), substitute white so edge stays visible.
+  function processColorize(w, h) {
+    const src = colorSrc.value;
+    const binThr = parseInt(colorBin.value);
+    const blackThr = parseInt(colorBlack.value);
+    const sat = parseInt(colorSat.value) / 100;
+    const thick = parseInt(colorThick.value);
+
+    buildBinary(src, binThr, MAT.bin);
+
+    // Optional dilation to thicken thin edges
+    if (thick > 0) {
+      cv.dilate(MAT.bin, MAT.bin, MAT.kernel, new cv.Point(-1, -1), thick);
+    }
+
+    // Boost saturation on the source RGB → punchier laser colors
+    cv.cvtColor(MAT.src_rgb, MAT.hsv, cv.COLOR_RGB2HSV);
+    const hsvData = MAT.hsv.data;
+    for (let i = 1; i < hsvData.length; i += 3) {
+      hsvData[i] = Math.min(255, hsvData[i] * sat);
+    }
+    cv.cvtColor(MAT.hsv, MAT.colored, cv.COLOR_HSV2RGB);
+
+    // Gather output: black canvas, copy color where mask, replace black-with-mask → white
+    if (!MAT.color_out || MAT.color_out.rows !== h || MAT.color_out.cols !== w) {
+      if (MAT.color_out) MAT.color_out.delete();
+      MAT.color_out = cv.Mat.zeros(h, w, cv.CV_8UC3);
+    } else {
+      MAT.color_out.setTo(new cv.Scalar(0, 0, 0));
+    }
+    MAT.colored.copyTo(MAT.color_out, MAT.bin);
+
+    const outData = MAT.color_out.data;
+    const binData = MAT.bin.data;
+    for (let p = 0, i = 0; p < binData.length; p++, i += 3) {
+      if (binData[p] === 0) continue;
+      const r = outData[i], g = outData[i+1], b = outData[i+2];
+      const lum = (r * 299 + g * 587 + b * 114) / 1000;
+      if (lum < blackThr) {
+        outData[i] = 255; outData[i+1] = 255; outData[i+2] = 255;
+      }
+    }
+
+    cv.imshow(canvases.color, MAT.color_out);
+  }
+
+  // ---- STEP 4: POLYLINES ----
+  // Vectorize the binary edge mask into ordered point lists, suitable for
+  // streaming to a galvo. Each polyline carries a sampled RGB color
+  // (black-cutoff fallback to white).
+  let lastPolylines = [];   // array of { points: [[x,y]...], color: [r,g,b] }
+  let streaming = false;
+  let streamSeq = 0;
+
+  function processPolylines(w, h) {
+    // Step 4 inherits Step 3's source/binarize/cutoff/saturation when "follow" is on.
+    // Step 3's saturation already lives in MAT.colored (computed in processColorize),
+    // which we sample below regardless.
+    const follow = polyFollow.checked;
+    const src      = follow ? colorSrc.value          : polySrc.value;
+    const binThr   = follow ? parseInt(colorBin.value)   : parseInt(polyBin.value);
+    const blackThr = follow ? parseInt(colorBlack.value) : parseInt(polyBlack.value);
+    const eps      = parseInt(polyEps.value) / 10;
+    const minPts   = parseInt(polyMin.value);
+    const maxLines = parseInt(polyMax.value);
+    const lw       = parseInt(polyLw.value);
+    const colorMode = polyColorMode.value;
+
+    buildBinary(src, binThr, MAT.bin);
+
+    const samMode = isSamSource(src);
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    // SAM: closed silhouette → RETR_EXTERNAL. Edge sources: open lines → RETR_LIST.
+    const retr = samMode ? cv.RETR_EXTERNAL : cv.RETR_LIST;
+    cv.findContours(MAT.bin, contours, hierarchy, retr, cv.CHAIN_APPROX_NONE);
+
+    // Sort by length, take top N. Each contours.get(i) returns a NEW JS wrapper
+    // around shared WASM data and must be .delete()'d to free the wrapper.
+    const items = [];
+    for (let i = 0; i < contours.size(); i++) {
+      const c = contours.get(i);
+      items.push({ idx: i, len: c.rows });
+      c.delete();
+    }
+    items.sort((a, b) => b.len - a.len);
+
+    const polylines = [];
+    const limit = Math.min(items.length, maxLines);
+    // Sample colors from the saturation-boosted palette (MAT.colored).
+    const colorSourceMat = (MAT.colored && MAT.colored.data && MAT.colored.data.length === w * h * 3)
+      ? MAT.colored : MAT.src_rgb;
+    const rgb = colorSourceMat.data;
+    const stride = w * 3;
+
+    // Helper: sample a single (x,y) from `rgb`, with black-cutoff fallback.
+    function sampleColor(x, y) {
+      const xi = Math.max(0, Math.min(w - 1, x | 0));
+      const yi = Math.max(0, Math.min(h - 1, y | 0));
+      const o = yi * stride + xi * 3;
+      let r = rgb[o], g = rgb[o+1], b = rgb[o+2];
+      const lum = (r * 299 + g * 587 + b * 114) / 1000;
+      if (lum < blackThr) { r = 255; g = 255; b = 255; }
+      return [r, g, b];
+    }
+
+    // Pre-compute the SAM-region average once per frame (used by sam_avg mode).
+    let samAvgColor = null;
+    if (colorMode === 'sam_avg' && MAT.gating_mask) {
+      const mdata = MAT.gating_mask.data;
+      let sr = 0, sg = 0, sb = 0, n = 0;
+      // Stride sample (every 4th pixel) — fast enough at 480p.
+      for (let yy = 0; yy < h; yy += 4) {
+        for (let xx = 0; xx < w; xx += 4) {
+          if (mdata[yy * w + xx] === 0) continue;
+          const o = yy * stride + xx * 3;
+          sr += rgb[o]; sg += rgb[o+1]; sb += rgb[o+2]; n++;
+        }
+      }
+      if (n > 0) {
+        let r = (sr/n)|0, g = (sg/n)|0, b = (sb/n)|0;
+        const lum = (r * 299 + g * 587 + b * 114) / 1000;
+        if (lum < blackThr) { r = 255; g = 255; b = 255; }
+        samAvgColor = [r, g, b];
+      }
+    }
+
+    // Pre-parse the uniform color picker once per frame.
+    let uniformColor = null;
+    if (colorMode === 'uniform') {
+      const hex = polyUniformColor.value || '#7cf2c0';
+      uniformColor = [
+        parseInt(hex.slice(1, 3), 16),
+        parseInt(hex.slice(3, 5), 16),
+        parseInt(hex.slice(5, 7), 16),
+      ];
+    }
+
+    for (let k = 0; k < limit; k++) {
+      const c = contours.get(items[k].idx);
+      const approx = new cv.Mat();
+      try {
+        cv.approxPolyDP(c, approx, eps, samMode);
+        const n = approx.rows;
+        if (n < minPts) continue;
+
+        const pts = new Array(n);
+        for (let j = 0; j < n; j++) {
+          const x = approx.intAt(j, 0);
+          const y = approx.intAt(j, 1);
+          pts[j] = [x, y];
+        }
+
+        // ---- color selection ----
+        let color;
+        if (colorMode === 'uniform') {
+          color = uniformColor;
+        } else if (colorMode === 'sam_avg' && samAvgColor) {
+          color = samAvgColor;
+        } else if (colorMode === 'midpoint') {
+          const mid = pts[(n / 2) | 0];
+          color = sampleColor(mid[0], mid[1]);
+        } else {
+          // 'centroid': use cv.moments on the original contour. For closed
+          // shapes this lands inside the silhouette → catches skin/body color.
+          // For open thin edges the centroid is on the line; we then nudge
+          // toward the contour's bounding-box center which is often inside.
+          let cx, cy;
+          try {
+            const M = cv.moments(c);
+            if (M.m00 > 0) {
+              cx = M.m10 / M.m00;
+              cy = M.m01 / M.m00;
+            } else {
+              const r = cv.boundingRect(c);
+              cx = r.x + r.width / 2;
+              cy = r.y + r.height / 2;
+            }
+          } catch (e) {
+            const mid = pts[(n / 2) | 0];
+            cx = mid[0]; cy = mid[1];
+          }
+          color = sampleColor(cx, cy);
+        }
+
+        // SAM silhouettes: explicitly close the loop so the laser draws back to start.
+        if (samMode && (pts[0][0] !== pts[n-1][0] || pts[0][1] !== pts[n-1][1])) {
+          pts.push([pts[0][0], pts[0][1]]);
+        }
+        polylines.push({ points: pts, color });
+      } finally {
+        approx.delete();
+        c.delete();
+      }
+    }
+    contours.delete();
+    hierarchy.delete();
+
+    // Render preview
+    const ctx = canvases.poly.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, w, h);
+    ctx.lineWidth = lw;
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    for (const pl of polylines) {
+      ctx.strokeStyle = `rgb(${pl.color[0]},${pl.color[1]},${pl.color[2]})`;
+      ctx.beginPath();
+      ctx.moveTo(pl.points[0][0], pl.points[0][1]);
+      for (let i = 1; i < pl.points.length; i++) {
+        ctx.lineTo(pl.points[i][0], pl.points[i][1]);
+      }
+      ctx.stroke();
+    }
+
+    lastPolylines = polylines;
+    const totalPts = polylines.reduce((s, p) => s + p.points.length, 0);
+    polyStats.textContent = `${polylines.length} paths · ${totalPts} pts`;
+
+    if (streaming) {
+      // Hook for live streaming. Replace this with WebSocket / serial / ILDA bridge.
+      console.log(JSON.stringify({
+        seq: streamSeq++,
+        w, h,
+        polylines,
+      }));
+    }
+  }
+
+  polyExport.onclick = () => {
+    const payload = {
+      width: canvases.poly.width,
+      height: canvases.poly.height,
+      timestamp: Date.now(),
+      polylines: lastPolylines,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `polylines-${Date.now()}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  polyStream.onclick = () => {
+    streaming = !streaming;
+    streamSeq = 0;
+    polyStream.textContent = streaming
+      ? 'stream to console (stop)'
+      : 'stream to console (start)';
+  };
+
+  // ============================================================
+  //          STROKE E — COLOR-SPLIT POLYLINES (real-time)
+  // ============================================================
+  // Walks each polyline contour pixel-by-pixel sampling color from the
+  // saturation-boosted palette (MAT.colored). Emits a new sub-polyline each
+  // time the color jumps by ΔE > threshold. Renders with optional glow.
+  let _lastCsplit = null;   // { polylines, w, h }
+  function processColorSplit(w, h) {
+    const ctx = canvases.csplit.getContext('2d');
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, w, h);
+    if (!csplit.on || !csplit.on.checked) {
+      ctx.fillStyle = '#444'; ctx.font = '12px monospace';
+      ctx.fillText('color-split disabled', 10, 20);
+      return;
+    }
+
+    const src = csplit.src.value;
+    const delta = parseInt(csplit.delta.value);
+    const stride = parseInt(csplit.stride.value);
+    const lw = parseInt(csplit.lw.value);
+    const glow = parseInt(csplit.glow.value);
+    const minSeg = parseInt(csplit.minseg.value);
+
+    // Reuse the polyline binary builder. For canny/neon it's already 0/255;
+    // for others it thresholds at the colorize panel's binarize value.
+    buildBinary(src, parseInt(colorBin.value), MAT.bin);
+
+    const contours = new cv.MatVector();
+    const hierarchy = new cv.Mat();
+    cv.findContours(MAT.bin, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_NONE);
+
+    const colorMat = (MAT.colored && MAT.colored.data && MAT.colored.data.length === w * h * 3)
+      ? MAT.colored : MAT.src_rgb;
+    const rgb = colorMat.data;
+    const rowStride = w * 3;
+    const allSegments = [];
+
+    function deltaE_sq(a, b) {
+      // Quick perceptual-ish distance in RGB. Good enough for the splitting
+      // decision; weights mirror luminance perception.
+      const dr = a[0] - b[0], dg = a[1] - b[1], db = a[2] - b[2];
+      return 2 * dr * dr + 4 * dg * dg + 3 * db * db;
+    }
+    const deltaSq = delta * delta * 9;  // approx scale
+
+    for (let ci = 0; ci < contours.size(); ci++) {
+      const c = contours.get(ci);
+      const n = c.rows;
+      if (n < minSeg) { c.delete(); continue; }
+
+      let segPts = [];
+      let segColor = null;
+      for (let i = 0; i < n; i += stride) {
+        const x = c.intAt(i, 0);
+        const y = c.intAt(i, 1);
+        if (x < 0 || x >= w || y < 0 || y >= h) continue;
+        const o = y * rowStride + x * 3;
+        const col = [rgb[o], rgb[o + 1], rgb[o + 2]];
+        if (segColor === null) {
+          segColor = col;
+          segPts.push([x, y]);
+          continue;
+        }
+        if (deltaE_sq(col, segColor) > deltaSq) {
+          // close current segment, start new
+          if (segPts.length >= minSeg) {
+            allSegments.push({ points: segPts, color: segColor });
+          }
+          segPts = [[x, y]];
+          segColor = col;
+        } else {
+          segPts.push([x, y]);
+          // running average for stability
+          segColor = [
+            (segColor[0] * 3 + col[0]) >> 2,
+            (segColor[1] * 3 + col[1]) >> 2,
+            (segColor[2] * 3 + col[2]) >> 2,
+          ];
+        }
+      }
+      if (segPts.length >= minSeg) {
+        allSegments.push({ points: segPts, color: segColor });
+      }
+      c.delete();
+    }
+    contours.delete(); hierarchy.delete();
+
+    // Render with optional glow
+    ctx.lineWidth = lw; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (glow > 0) {
+      ctx.shadowBlur = glow;
+    } else {
+      ctx.shadowBlur = 0;
+    }
+    for (const seg of allSegments) {
+      const cstr = `rgb(${seg.color[0]},${seg.color[1]},${seg.color[2]})`;
+      ctx.strokeStyle = cstr;
+      if (glow > 0) ctx.shadowColor = cstr;
+      ctx.beginPath();
+      ctx.moveTo(seg.points[0][0], seg.points[0][1]);
+      for (let i = 1; i < seg.points.length; i++) {
+        ctx.lineTo(seg.points[i][0], seg.points[i][1]);
+      }
+      ctx.stroke();
+    }
+    ctx.shadowBlur = 0;
+
+    _lastCsplit = { polylines: allSegments, w, h };
+    const totalPts = allSegments.reduce((s, p) => s + p.points.length, 0);
+    document.getElementById('csplit-stats').textContent =
+      `${allSegments.length} segs · ${totalPts} pts`;
+    document.getElementById('csplit-ild').disabled  = allSegments.length === 0;
+    document.getElementById('csplit-json').disabled = allSegments.length === 0;
+  }
+
+  document.getElementById('csplit-ild').onclick = async () => {
+    if (!_lastCsplit) return;
+    const btn = document.getElementById('csplit-ild');
+    btn.disabled = true;
+    try {
+      const res = await fetch(`${API_BASE}/api/laser/ild-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          width: _lastCsplit.w, height: _lastCsplit.h,
+          polylines: _lastCsplit.polylines, invert_y: true,
+          filename: `csplit_${Date.now()}.ild`,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `csplit_${Date.now()}.ild`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('csplit ild failed: ' + e.message);
+    } finally { btn.disabled = false; }
+  };
+  document.getElementById('csplit-json').onclick = () => {
+    if (!_lastCsplit) return;
+    const blob = new Blob([JSON.stringify(_lastCsplit, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `csplit_${Date.now()}.json`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  // ============================================================
+  //          VIDEO ILDA RECORDER (multi-frame .ild)
+  // ============================================================
+  // Captures one frame per video animation tick from a chosen source. After
+  // stop, posts the array to /api/laser/ild-multi-export which packs them
+  // into a single multi-frame ILDA file using your existing write_ilda_file.
+  const _recorder = {
+    on: false,
+    frames: [],            // [{ polylines, width, height, timestamp_ms }]
+    lastVideoTimeMs: -1,
+    droppedDup: 0,
+  };
+
+  function _currentRecorderSourceFrame() {
+    const which = rec.src.value;
+    if (which === 'csplit') return _lastCsplit;
+    return (typeof lastPolylines !== 'undefined' && lastPolylines && lastPolylines.length)
+      ? { polylines: lastPolylines, w: canvases.poly.width, h: canvases.poly.height }
+      : null;
+  }
+
+  function _recorderTick() {
+    if (!_recorder.on) return;
+    // Skip if the video hasn't actually advanced (paused or no change)
+    const tMs = Math.round((video.currentTime || 0) * 1000);
+    if (tMs === _recorder.lastVideoTimeMs) {
+      _recorder.droppedDup++;
+      return;
+    }
+    _recorder.lastVideoTimeMs = tMs;
+    const stride = parseInt(rec.stride.value);
+    if (stride > 1 && (_recorder.frames.length % stride) !== 0) {
+      // simple modulo skip
+    }
+    const src = _currentRecorderSourceFrame();
+    if (!src || !src.polylines) return;
+
+    _recorder.frames.push({
+      polylines: src.polylines,
+      width: src.w,
+      height: src.h,
+      timestamp_ms: tMs,
+    });
+
+    const max = parseInt(rec.maxf.value);
+    if (_recorder.frames.length >= max) {
+      _stopRecording(true);
+    }
+
+    // Render preview: show the current source on the recorder canvas + frame counter
+    const ctx = canvases.recorder.getContext('2d');
+    canvases.recorder.width = src.w;
+    canvases.recorder.height = src.h;
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, src.w, src.h);
+    ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const pl of src.polylines) {
+      if (!pl.points || pl.points.length < 2) continue;
+      ctx.strokeStyle = `rgb(${pl.color[0]},${pl.color[1]},${pl.color[2]})`;
+      ctx.beginPath();
+      ctx.moveTo(pl.points[0][0], pl.points[0][1]);
+      for (let i = 1; i < pl.points.length; i++) ctx.lineTo(pl.points[i][0], pl.points[i][1]);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.font = '14px monospace';
+    ctx.fillText(`● REC  ${_recorder.frames.length} frames`, 10, 22);
+
+    document.getElementById('rec-stats').textContent =
+      `${_recorder.frames.length} frames · ${(tMs / 1000).toFixed(2)}s`;
+  }
+
+  async function _stopRecording(autoDownload) {
+    _recorder.on = false;
+    document.getElementById('rec-start').disabled = false;
+    document.getElementById('rec-stop').disabled = true;
+    document.getElementById('rec-stats').textContent =
+      `stopped · ${_recorder.frames.length} frames captured`;
+    if (!autoDownload || _recorder.frames.length === 0) return;
+    document.getElementById('rec-stats').textContent =
+      `building .ild for ${_recorder.frames.length} frames…`;
+    try {
+      const res = await fetch(`${API_BASE}/api/laser/ild-multi-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          frames: _recorder.frames,
+          invert_y: true,
+          filename: `show_${Date.now()}.ild`,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `show_${Date.now()}.ild`; a.click();
+      URL.revokeObjectURL(url);
+      document.getElementById('rec-stats').textContent =
+        `downloaded · ${_recorder.frames.length} frames`;
+    } catch (e) {
+      document.getElementById('rec-stats').textContent = 'error: ' + e.message;
+    }
+  }
+
+  document.getElementById('rec-start').onclick = () => {
+    _recorder.frames = [];
+    _recorder.lastVideoTimeMs = -1;
+    _recorder.droppedDup = 0;
+    _recorder.on = true;
+    document.getElementById('rec-start').disabled = true;
+    document.getElementById('rec-stop').disabled = false;
+    document.getElementById('rec-stats').textContent = 'recording…';
+    // Make sure the video is playing so frames advance
+    if (samState.mediaType !== 'image') {
+      try { video.play().catch(() => {}); } catch (e) {}
+    }
+  };
+  document.getElementById('rec-stop').onclick = () => _stopRecording(true);
+
+  // ============================================================
+  //                    SAM 3 INTEGRATION
+  // ============================================================
+  // Backend default. Edit via the "edit api url" button if you run uvicorn elsewhere.
+  let API_BASE = localStorage.getItem('sam_api_base') || 'http://localhost:8001';
+  document.getElementById('api-base-val').textContent = API_BASE;
+  document.getElementById('api-base-edit').onclick = () => {
+    const v = prompt('Backend API base URL (no trailing slash):', API_BASE);
+    if (v) {
+      API_BASE = v.replace(/\/$/, '');
+      localStorage.setItem('sam_api_base', API_BASE);
+      document.getElementById('api-base-val').textContent = API_BASE;
+    }
+  };
+
+  const samPath        = document.getElementById('sam-path');
+  const samFilePicker  = document.getElementById('sam-file-picker');
+  const samChooseFile  = document.getElementById('sam-choose-file');
+  const samFileName    = document.getElementById('sam-file-name');
+  const samUploadProg  = document.getElementById('sam-upload-progress');
+  const samPromptType  = document.getElementById('sam-prompt-type');
+  const samText        = document.getElementById('sam-text');
+  const samBboxField   = document.getElementById('sam-bbox');
+  const samPickBbox    = document.getElementById('sam-pick-bbox');
+  const samPartsField  = document.getElementById('sam-parts');
+  const samImgsz       = document.getElementById('sam-imgsz');
+  const samStride      = document.getElementById('sam-stride');
+  const samProcessBtn  = document.getElementById('sam-process');
+  const samProgressBar = document.getElementById('sam-progress').firstElementChild;
+  const samProgressTxt = document.getElementById('sam-progress-text');
+  const samEnable      = document.getElementById('sam-enable');
+  const samGateEdges   = document.getElementById('sam-gate-edges');
+  const samDilate      = document.getElementById('sam-dilate');
+  const samDilateV     = document.getElementById('sam-dilate-v');
+  const samFeather     = document.getElementById('sam-feather');
+  const samFeatherV    = document.getElementById('sam-feather-v');
+  const samPreviewMode = document.getElementById('sam-preview-mode');
+  const partsList      = document.getElementById('parts-list');
+  const polyIldBtn     = document.getElementById('poly-ild');
+
+  const samState = {
+    enabled: false,
+    gateEdges: false,
+    cacheId: null,
+    manifest: null,
+    sourceFps: 24,
+    sourceFrameCount: 0,
+    panelW: 0, panelH: 0,
+    // mask cache: frameIdx → {mat: cv.Mat | null, loading: bool}
+    cache: new Map(),
+    partMasks: {},      // slug → cv.Mat at panel size for current frame
+    partFrameIdx: -1,
+    partsEnabled: {},   // slug → bool
+    partsColors: {},    // slug → [r,g,b]
+    lastFrameIdx: -1,
+  };
+
+  samPromptType.onchange = () => {
+    const isText = samPromptType.value === 'text';
+    samText.style.display = isText ? '' : 'none';
+    samBboxField.style.display = isText ? 'none' : '';
+    samPickBbox.style.display = isText ? 'none' : '';
+  };
+  samPromptType.onchange();
+
+  samDilate.oninput  = () => samDilateV.textContent  = samDilate.value;
+  samFeather.oninput = () => samFeatherV.textContent = samFeather.value;
+
+  // ---- choose-file → upload to backend, set both SAM path and <video> src ----
+  samChooseFile.onclick = () => samFilePicker.click();
+  samFilePicker.onchange = async (e) => {
+    const f = e.target.files && e.target.files[0];
+    if (!f) return;
+    samFileName.textContent = f.name;
+    samUploadProg.textContent = 'uploading…';
+    samChooseFile.disabled = true;
+    try {
+      const fd = new FormData();
+      fd.append('file', f);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/api/sam3/upload`);
+      const done = new Promise((resolve, reject) => {
+        xhr.upload.onprogress = (ev) => {
+          if (ev.lengthComputable) {
+            const pct = (ev.loaded / ev.total * 100).toFixed(0);
+            samUploadProg.textContent = `uploading… ${pct}%`;
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+          else reject(new Error(`upload failed: ${xhr.status} ${xhr.responseText}`));
+        };
+        xhr.onerror = () => reject(new Error('network error'));
+      });
+      xhr.send(fd);
+      const data = await done;
+      samPath.value = data.path;
+      samUploadProg.textContent = `ready (${(data.size / (1024*1024)).toFixed(1)} MB)`;
+
+      // Trust the backend's detection (handles avif/heic/etc by extension)
+      // and fall back to the browser-reported MIME if backend didn't decide.
+      const detected = (data.media_type || '').toLowerCase();
+      const isImage = detected
+        ? (detected === 'image')
+        : (f.type || '').startsWith('image/');
+      samState.mediaType = isImage ? 'image' : 'video';
+      samProcessBtn.textContent = isImage ? 'process image with SAM 3' : 'process video with SAM 3';
+      document.getElementById('sam-media-pill').textContent = isImage ? '· image mode' : '· video mode';
+
+      if (isImage) {
+        // Static image: stop video, load <img>, restart loop bound to <img>.
+        try { video.pause(); } catch (e) {}
+        if (!samState.imageEl) samState.imageEl = new Image();
+        samState.imageEl.crossOrigin = 'anonymous';
+        await new Promise((resolve, reject) => {
+          samState.imageEl.onload = resolve;
+          samState.imageEl.onerror = () => reject(new Error('image failed to load'));
+          samState.imageEl.src = `${API_BASE}${data.url}`;
+        });
+        // hide play/pause/restart buttons (irrelevant for images)
+        playPauseBtn.style.display = 'none';
+        restartBtn.style.display = 'none';
+        restartLoop(samState.imageEl);
+      } else {
+        playPauseBtn.style.display = '';
+        restartBtn.style.display = '';
+        video.crossOrigin = 'anonymous';
+        video.src = `${API_BASE}${data.url}`;
+        video.load();
+        await video.play().catch(() => {});
+        restartLoop(video);
+      }
+    } catch (err) {
+      samUploadProg.textContent = '';
+      alert('upload failed: ' + err.message);
+    } finally {
+      samChooseFile.disabled = false;
+    }
+  };
+
+  // ---- bbox draw modal ----
+  const bboxModal   = document.getElementById('bbox-modal');
+  const bboxCanvas  = document.getElementById('bbox-canvas');
+  const bboxCoords  = document.getElementById('bbox-coords');
+  let bboxRect = null;
+
+  samPickBbox.onclick = async () => {
+    const p = samPath.value.trim();
+    if (!p) return alert('paste a local video path first');
+    samProgressTxt.textContent = 'fetching first frame...';
+    try {
+      const res = await fetch(`${API_BASE}/api/sam3/first-frame`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ video_path: p }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        bboxCanvas.width = data.width;
+        bboxCanvas.height = data.height;
+        const c = bboxCanvas.getContext('2d');
+        c.drawImage(img, 0, 0);
+        bboxModal.classList.add('show');
+      };
+      img.src = `${API_BASE}${data.url}`;
+      samProgressTxt.textContent = 'idle';
+    } catch (e) {
+      samProgressTxt.textContent = 'first-frame failed: ' + e.message;
+      samProgressTxt.classList.add('err');
+    }
+  };
+
+  // drag to draw on bbox canvas
+  let drag = null;
+  bboxCanvas.addEventListener('mousedown', e => {
+    const r = bboxCanvas.getBoundingClientRect();
+    const sx = bboxCanvas.width  / r.width;
+    const sy = bboxCanvas.height / r.height;
+    drag = { x0: (e.clientX - r.left) * sx, y0: (e.clientY - r.top) * sy };
+  });
+  bboxCanvas.addEventListener('mousemove', e => {
+    if (!drag) return;
+    const r = bboxCanvas.getBoundingClientRect();
+    const sx = bboxCanvas.width  / r.width;
+    const sy = bboxCanvas.height / r.height;
+    const x1 = (e.clientX - r.left) * sx;
+    const y1 = (e.clientY - r.top)  * sy;
+    bboxRect = [Math.round(Math.min(drag.x0, x1)), Math.round(Math.min(drag.y0, y1)),
+                Math.round(Math.max(drag.x0, x1)), Math.round(Math.max(drag.y0, y1))];
+    // redraw
+    const ctx = bboxCanvas.getContext('2d');
+    // we don't have the original image cached here; just overlay
+    ctx.save();
+    ctx.strokeStyle = '#7cf2c0';
+    ctx.lineWidth = 3;
+    // erase prior box by re-fetching not feasible; we just stroke on top
+    ctx.strokeRect(bboxRect[0], bboxRect[1], bboxRect[2]-bboxRect[0], bboxRect[3]-bboxRect[1]);
+    ctx.restore();
+    bboxCoords.textContent = `bbox: ${bboxRect.join(', ')}`;
+  });
+  bboxCanvas.addEventListener('mouseup', () => { drag = null; });
+  document.getElementById('bbox-cancel').onclick = () => { bboxModal.classList.remove('show'); };
+  document.getElementById('bbox-confirm').onclick = () => {
+    if (!bboxRect) return alert('drag to draw a box first');
+    samBboxField.value = bboxRect.join(',');
+    bboxModal.classList.remove('show');
+  };
+
+  // ---- process click ----
+  samProcessBtn.onclick = async () => {
+    const p = samPath.value.trim();
+    if (!p) return alert('paste a local video path');
+    const promptType = samPromptType.value;
+    const promptValue = promptType === 'text' ? samText.value.trim() : samBboxField.value.trim();
+    if (!promptValue) return alert(`enter the ${promptType} prompt`);
+    const parts = samPartsField.value.split(',').map(s => s.trim()).filter(Boolean);
+
+    samProcessBtn.disabled = true;
+    samProgressTxt.classList.remove('err');
+    samProgressTxt.textContent = 'queuing...';
+    samProgressBar.style.width = '0%';
+
+    try {
+      const res = await fetch(`${API_BASE}/api/sam3/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          video_path: p,
+          prompt_type: promptType,
+          prompt_value: promptValue,
+          parts,
+          imgsz: parseInt(samImgsz.value),
+          process_every_n: parseInt(samStride.value),
+          media_type: samState.mediaType || null,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { cache_id } = await res.json();
+      await pollSamJob(cache_id);
+    } catch (e) {
+      samProgressTxt.classList.add('err');
+      samProgressTxt.textContent = 'error: ' + e.message;
+    } finally {
+      samProcessBtn.disabled = false;
+    }
+  };
+
+  const samCancelBtn = document.getElementById('sam-cancel');
+  samCancelBtn.onclick = async () => {
+    const cid = samState._activeJob;
+    if (!cid) return;
+    samCancelBtn.disabled = true;
+    try {
+      await fetch(`${API_BASE}/api/sam3/jobs/${cid}/cancel`, { method: 'POST' });
+    } catch (e) {}
+  };
+
+  async function pollSamJob(cacheId) {
+    samState._activeJob = cacheId;
+    samCancelBtn.style.display = '';
+    samCancelBtn.disabled = false;
+    try {
+      while (true) {
+        await new Promise(r => setTimeout(r, 1500));
+        const res = await fetch(`${API_BASE}/api/sam3/jobs/${cacheId}`);
+        if (!res.ok) throw new Error('job lookup failed');
+        const m = await res.json();
+        const pct = (m.progress || 0) * 100;
+        samProgressBar.style.width = pct.toFixed(1) + '%';
+        const stage = m.stage ? ` · ${m.stage}` : '';
+        const fr = m.frames_processed != null ? ` · ${m.frames_processed} frames` : '';
+        samProgressTxt.textContent = `${m.status}${stage}${fr} · ${pct.toFixed(0)}%`;
+        if (m.status === 'done') {
+          installSamCache(cacheId, m);
+          return;
+        }
+        if (m.status === 'error' || m.status === 'cancelled') {
+          samProgressTxt.classList.add('err');
+          samProgressTxt.textContent = `${m.status}: ` + (m.error || 'unknown');
+          return;
+        }
+      }
+    } finally {
+      samCancelBtn.style.display = 'none';
+      samState._activeJob = null;
+    }
+  }
+
+  // Free every cv.Mat held in the SAM mask caches before clearing the JS Maps.
+  // Without this, the underlying WASM memory leaks every time you re-process a video.
+  function freeMaskCaches() {
+    if (samState.cache && samState.cache.size) {
+      for (const entry of samState.cache.values()) {
+        if (entry && entry.mat && typeof entry.mat.delete === 'function') {
+          try { entry.mat.delete(); } catch (e) {}
+        }
+      }
+      samState.cache.clear();
+    }
+    if (samState._partCache && samState._partCache.size) {
+      for (const entry of samState._partCache.values()) {
+        if (entry && entry.mat && typeof entry.mat.delete === 'function') {
+          try { entry.mat.delete(); } catch (e) {}
+        }
+      }
+      samState._partCache.clear();
+    }
+    samState.partMasks = {};
+  }
+
+  function installSamCache(cacheId, manifest) {
+    samState.cacheId = cacheId;
+    samState.manifest = manifest;
+    samState.sourceFps = manifest.video_fps || 24;
+    samState.sourceFrameCount = manifest.video_frames || 0;
+    if (manifest.media_type) samState.mediaType = manifest.media_type;
+
+    // Resume playback once SAM is ready — the user usually paused or the video
+    // stalled during the long processing wait.
+    if (samState.mediaType !== 'image') {
+      try { video.play().catch(() => {}); } catch (e) {}
+      playPauseBtn.textContent = 'pause';
+    }
+    freeMaskCaches();
+    samState.partsEnabled = {};
+    samState.partsColors = {};
+    samState.partFrameIdx = -1;
+    samState.lastFrameIdx = -1;
+
+    samEnable.disabled = false;
+    samGateEdges.disabled = false;
+    samEnable.checked = true;
+    samState.enabled = true;
+    // Default: when SAM is loaded, isolate downstream panels to the mask region.
+    samGateEdges.checked = true;
+    samState.gateEdges = true;
+
+    // build parts UI
+    partsList.innerHTML = '';
+    const parts = (manifest.parts_done || manifest.parts || []).map(s => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, ''));
+    if (!parts.length) {
+      partsList.innerHTML = '<span style="font-size:11px;color:var(--muted)">no parts in this run.</span>';
+    } else {
+      const palette = [[255,80,80],[80,200,255],[180,255,80],[255,180,80],[200,120,255],[255,255,120]];
+      parts.forEach((slug, i) => {
+        samState.partsEnabled[slug] = true;
+        samState.partsColors[slug] = palette[i % palette.length];
+        const chip = document.createElement('span');
+        chip.className = 'part-chip';
+        chip.dataset.slug = slug;
+        chip.innerHTML = `<span class="swatch" style="background:rgb(${palette[i % palette.length].join(',')})"></span>${slug}`;
+        chip.onclick = () => {
+          samState.partsEnabled[slug] = !samState.partsEnabled[slug];
+          chip.classList.toggle('off', !samState.partsEnabled[slug]);
+        };
+        partsList.appendChild(chip);
+      });
+    }
+  }
+
+  samEnable.onchange = () => { samState.enabled = samEnable.checked; };
+  samGateEdges.onchange = () => { samState.gateEdges = samGateEdges.checked; };
+
+  // ---- per-frame mask loader ----
+  function currentSourceFrameIdx() {
+    if (samState.mediaType === 'image') return 0;
+    return Math.max(0, Math.floor((video.currentTime || 0) * samState.sourceFps));
+  }
+  function maskUrl(frameIdx) {
+    const fn = String(frameIdx).padStart(6, '0') + '.png';
+    return `${API_BASE}/sam3_cache/${samState.cacheId}/mask/${fn}`;
+  }
+  function partMaskUrl(slug, frameIdx) {
+    const fn = String(frameIdx).padStart(6, '0') + '.png';
+    return `${API_BASE}/sam3_cache/${samState.cacheId}/parts/${slug}/${fn}`;
+  }
+
+  // Convert a loaded image element to a 0/255 single-channel cv.Mat at panel size.
+  function imageToMaskMat(img, panelW, panelH) {
+    const tmp = document.createElement('canvas');
+    tmp.width = panelW; tmp.height = panelH;
+    const ctx = tmp.getContext('2d');
+    ctx.drawImage(img, 0, 0, panelW, panelH);
+    const data = ctx.getImageData(0, 0, panelW, panelH).data;
+    const m = new cv.Mat(panelH, panelW, cv.CV_8UC1);
+    const arr = m.data;
+    for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+      arr[j] = data[i] > 127 ? 255 : 0;   // use red channel
+    }
+    return m;
+  }
+
+  function fetchMask(frameIdx) {
+    if (samState.cache.has(frameIdx)) return samState.cache.get(frameIdx);
+    const entry = { mat: null, loading: true };
+    samState.cache.set(frameIdx, entry);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try { entry.mat = imageToMaskMat(img, samState.panelW, samState.panelH); }
+      catch (e) { console.warn('mask decode failed', e); }
+      entry.loading = false;
+    };
+    img.onerror = () => { entry.loading = false; };  // mask doesn't exist — that's fine
+    img.src = maskUrl(frameIdx);
+    return entry;
+  }
+
+  function fetchPartMask(slug, frameIdx) {
+    const key = `${slug}@${frameIdx}`;
+    if (samState._partCache && samState._partCache.has(key)) return samState._partCache.get(key);
+    if (!samState._partCache) samState._partCache = new Map();
+    const entry = { mat: null, loading: true };
+    samState._partCache.set(key, entry);
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try { entry.mat = imageToMaskMat(img, samState.panelW, samState.panelH); }
+      catch (e) {}
+      entry.loading = false;
+    };
+    img.onerror = () => { entry.loading = false; };
+    img.src = partMaskUrl(slug, frameIdx);
+    return entry;
+  }
+
+  function updateSamMaskForCurrentFrame(panelW, panelH) {
+    samState.panelW = panelW; samState.panelH = panelH;
+    if (!samState.enabled || !samState.cacheId) {
+      MAT.sam_mask = null;
+      return;
+    }
+    const idx = currentSourceFrameIdx();
+    // prefetch — for video, get nearby frames; for images there's only frame 0.
+    if (samState.mediaType === 'image') {
+      fetchMask(0);
+    } else {
+      for (let d = -2; d <= 5; d++) fetchMask(Math.max(0, idx + d));
+    }
+
+    let entry = samState.cache.get(idx);
+    let useIdx = idx;
+    if (!entry || !entry.mat) {
+      // walk back to nearest available
+      for (let d = 1; d <= 10; d++) {
+        const cand = samState.cache.get(idx - d);
+        if (cand && cand.mat) { entry = cand; useIdx = idx - d; break; }
+      }
+    }
+    if (!entry || !entry.mat) {
+      MAT.sam_mask = null;
+      return;
+    }
+    // build sam_mask = entry.mat with dilate + feather
+    if (!MAT.sam_raw) MAT.sam_raw = new cv.Mat();
+    if (!MAT.sam_mask) MAT.sam_mask = new cv.Mat();
+    entry.mat.copyTo(MAT.sam_raw);
+
+    const dil = parseInt(samDilate.value);
+    if (dil > 0) {
+      const k = cv.Mat.ones(2*dil+1, 2*dil+1, cv.CV_8U);
+      cv.dilate(MAT.sam_raw, MAT.sam_raw, k);
+      k.delete();
+    }
+    const feat = parseInt(samFeather.value);
+    if (feat > 0) {
+      const sigma = feat / 3;
+      const ks = Math.max(3, (feat * 2 + 1) | 1);
+      cv.GaussianBlur(MAT.sam_raw, MAT.sam_mask, new cv.Size(ks, ks), sigma, sigma);
+      // re-binarize after blur for clean gating
+      cv.threshold(MAT.sam_mask, MAT.sam_mask, 64, 255, cv.THRESH_BINARY);
+    } else {
+      MAT.sam_raw.copyTo(MAT.sam_mask);
+    }
+    samState.lastFrameIdx = useIdx;
+  }
+
+  function drawSamPanel(panelW, panelH) {
+    const ctx = canvases.sam.getContext('2d');
+    if (!samState.enabled || !MAT.sam_mask) {
+      ctx.fillStyle = '#0b0b0e'; ctx.fillRect(0, 0, panelW, panelH);
+      ctx.fillStyle = '#444'; ctx.font = '12px monospace';
+      ctx.fillText('SAM disabled — process a video to enable', 10, 20);
+      document.getElementById('panel-sam').classList.toggle('active', false);
+      return;
+    }
+    document.getElementById('panel-sam').classList.toggle('active', true);
+
+    const mode = samPreviewMode.value;
+    if (mode === 'binary') {
+      cv.imshow(canvases.sam, MAT.sam_mask);
+    } else if (mode === 'masked') {
+      const out = new cv.Mat();
+      cv.bitwise_and(MAT.src, MAT.src, out, MAT.sam_mask);
+      cv.imshow(canvases.sam, out);
+      out.delete();
+    } else {
+      // overlay: tint mask region green at 35% alpha
+      cv.imshow(canvases.sam, MAT.src);
+      const c = canvases.sam.getContext('2d');
+      const img = c.getImageData(0, 0, panelW, panelH);
+      const md = MAT.sam_mask.data;
+      const pd = img.data;
+      for (let i = 0, p = 0; i < md.length; i++, p += 4) {
+        if (md[i] > 0) {
+          pd[p]   = Math.round(pd[p]   * 0.55 + 124 * 0.45);
+          pd[p+1] = Math.round(pd[p+1] * 0.55 + 242 * 0.45);
+          pd[p+2] = Math.round(pd[p+2] * 0.55 + 192 * 0.45);
+        }
+      }
+      c.putImageData(img, 0, 0);
+    }
+  }
+
+  function drawPartsPanel(panelW, panelH) {
+    const ctx = canvases.parts.getContext('2d');
+    if (!samState.enabled || !samState.cacheId || !Object.keys(samState.partsColors).length) {
+      ctx.fillStyle = '#0b0b0e'; ctx.fillRect(0, 0, panelW, panelH);
+      ctx.fillStyle = '#444'; ctx.font = '12px monospace';
+      ctx.fillText('add parts in the SAM bar (e.g. "head, body") and re-process', 10, 20);
+      document.getElementById('panel-parts').classList.toggle('active', false);
+      return;
+    }
+    document.getElementById('panel-parts').classList.toggle('active', true);
+
+    const idx = currentSourceFrameIdx();
+    if (idx !== samState.partFrameIdx) {
+      samState.partMasks = {};
+      for (const slug in samState.partsColors) {
+        const e = fetchPartMask(slug, idx);
+        if (e && e.mat) samState.partMasks[slug] = e.mat;
+        // prefetch ahead (skip for static images)
+        if (samState.mediaType !== 'image') {
+          for (let d = 1; d <= 4; d++) fetchPartMask(slug, idx + d);
+        }
+      }
+      samState.partFrameIdx = idx;
+    }
+
+    // draw original then composite each part with its color
+    cv.imshow(canvases.parts, MAT.src);
+    const img = ctx.getImageData(0, 0, panelW, panelH);
+    const pd = img.data;
+    for (const slug in samState.partMasks) {
+      if (!samState.partsEnabled[slug]) continue;
+      const m = samState.partMasks[slug].data;
+      const [r, g, b] = samState.partsColors[slug];
+      for (let i = 0, p = 0; i < m.length; i++, p += 4) {
+        if (m[i] > 0) {
+          pd[p]   = Math.round(pd[p]   * 0.4 + r * 0.6);
+          pd[p+1] = Math.round(pd[p+1] * 0.4 + g * 0.6);
+          pd[p+2] = Math.round(pd[p+2] * 0.4 + b * 0.6);
+        }
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
+  // ============================================================
+  //                    .ILD download
+  // ============================================================
+  polyIldBtn.onclick = async () => {
+    if (!lastPolylines || !lastPolylines.length) return alert('no polylines on screen');
+    polyIldBtn.disabled = true;
+    polyIldBtn.textContent = 'building...';
+    try {
+      const payload = {
+        width: canvases.poly.width,
+        height: canvases.poly.height,
+        polylines: lastPolylines.map(p => ({ points: p.points, color: p.color })),
+        invert_y: true,
+      };
+      const res = await fetch(`${API_BASE}/api/laser/ild-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `frame_${Date.now()}.ild`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert('ild export failed: ' + e.message);
+    } finally {
+      polyIldBtn.disabled = false;
+      polyIldBtn.textContent = 'download .ild';
+    }
+  };
+
+  // ============================================================
+  //               STROKE-ART CENTERLINE PIPELINE
+  // ============================================================
+  // Independent of SAM. For raster stroke-art images (e.g. AI generated
+  // neon line art) we extract centerlines server-side via three methods,
+  // then render each result into its own preview canvas.
+  const strokeStatus   = document.getElementById('stroke-status');
+  const strokeState    = {};   // method → { polylines, w, h }
+
+  // Generic slider binder. Echoes current value alongside the slider.
+  const _strokeBind = (id, fmt = v => v) => {
+    const el = document.getElementById(id);
+    const out = document.getElementById(id + '-v');
+    if (!el || !out) return null;
+    const update = () => out.textContent = fmt(el.value);
+    el.addEventListener('input', update);
+    update();
+    return el;
+  };
+  // Per-card slider bindings. Each card has the params relevant to its method.
+  const skel = {
+    thr:    _strokeBind('skeleton-thr'),
+    minlen: _strokeBind('skeleton-minlen'),
+    prune:  _strokeBind('skeleton-prune'),
+    morph:  _strokeBind('skeleton-morph'),
+    eps:    _strokeBind('skeleton-eps',    v => (v / 10).toFixed(1)),
+  };
+  const pcol = {
+    thr:     _strokeBind('percolor-thr'),
+    ncolors: _strokeBind('percolor-ncolors'),
+    minlen:  _strokeBind('percolor-minlen'),
+    prune:   _strokeBind('percolor-prune'),
+    morph:   _strokeBind('percolor-morph'),
+    eps:     _strokeBind('percolor-eps',   v => (v / 10).toFixed(1)),
+  };
+  const ptr = {
+    thr:     _strokeBind('potrace-thr'),
+    ncolors: _strokeBind('potrace-ncolors'),
+    morph:   _strokeBind('potrace-morph'),
+    eps:     _strokeBind('potrace-eps',    v => (v / 10).toFixed(1)),
+  };
+  const neonS = {
+    minlen: _strokeBind('neon-minlen'),
+    prune:  _strokeBind('neon-prune'),
+    eps:    _strokeBind('neon-eps',        v => (v / 10).toFixed(1)),
+  };
+  const csplit = {
+    src:     document.getElementById('csplit-src'),
+    delta:   _strokeBind('csplit-delta'),
+    stride:  _strokeBind('csplit-stride'),
+    lw:      _strokeBind('csplit-lw'),
+    glow:    _strokeBind('csplit-glow'),
+    minseg:  _strokeBind('csplit-minseg'),
+    on:      document.getElementById('csplit-on'),
+  };
+  const rec = {
+    src:     document.getElementById('rec-src'),
+    stride:  _strokeBind('rec-stride'),
+    maxf:    _strokeBind('rec-maxf'),
+  };
+
+  function _strokeParamsFor(method) {
+    const samPayload = (samState.enabled && samState.cacheId) ?
+      { sam_cache_id: samState.cacheId, sam_frame_idx: 0 } : {};
+    if (method === 'skeleton') {
+      return {
+        brightness_threshold: parseInt(skel.thr.value),
+        morph_close: parseInt(skel.morph.value),
+        min_length: parseInt(skel.minlen.value),
+        prune_branches: parseInt(skel.prune.value),
+        simplify_eps: parseInt(skel.eps.value) / 10,
+        ...samPayload,
+      };
+    }
+    if (method === 'per_color') {
+      return {
+        brightness_threshold: parseInt(pcol.thr.value),
+        n_colors: parseInt(pcol.ncolors.value),
+        morph_close: parseInt(pcol.morph.value),
+        min_length: parseInt(pcol.minlen.value),
+        prune_branches: parseInt(pcol.prune.value),
+        simplify_eps: parseInt(pcol.eps.value) / 10,
+        ...samPayload,
+      };
+    }
+    if (method === 'potrace') {
+      return {
+        brightness_threshold: parseInt(ptr.thr.value),
+        n_colors: parseInt(ptr.ncolors.value),
+        morph_close: parseInt(ptr.morph.value),
+        simplify_eps: parseInt(ptr.eps.value) / 10,
+        ...samPayload,
+      };
+    }
+    if (method === 'neon') {
+      return {
+        min_length: parseInt(neonS.minlen.value),
+        prune_branches: parseInt(neonS.prune.value),
+        simplify_eps: parseInt(neonS.eps.value) / 10,
+        ...samPayload,
+      };
+    }
+    return samPayload;
+  }
+
+  function _renderStrokeCanvas(canvasId, w, h, polylines) {
+    const c = document.getElementById(canvasId);
+    const TARGET_W = 480;
+    const scale = Math.min(1, TARGET_W / w);
+    c.width  = Math.round(w * scale);
+    c.height = Math.round(h * scale);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, c.width, c.height);
+    if (!Array.isArray(polylines) || polylines.length === 0) return;
+    ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    for (const pl of polylines) {
+      if (!pl.points || pl.points.length < 2) continue;
+      ctx.strokeStyle = `rgb(${pl.color[0]},${pl.color[1]},${pl.color[2]})`;
+      ctx.beginPath();
+      ctx.moveTo(pl.points[0][0] * scale, pl.points[0][1] * scale);
+      for (let i = 1; i < pl.points.length; i++) {
+        ctx.lineTo(pl.points[i][0] * scale, pl.points[i][1] * scale);
+      }
+      ctx.stroke();
+    }
+  }
+
+  function _strokeMethodResult(method, result, w, h) {
+    const statsEl = document.getElementById(`stroke-${method}-stats`);
+    const ildBtn  = document.getElementById(`stroke-${method}-ild`);
+    const jsonBtn = document.getElementById(`stroke-${method}-json`);
+    const canvas  = `cv-stroke-${method}`;
+    if (!result) {
+      statsEl.textContent = 'not run';
+      _renderStrokeCanvas(canvas, w, h, []);
+      ildBtn.disabled = true; jsonBtn.disabled = true;
+      return;
+    }
+    if (result.error) {
+      statsEl.textContent = 'error: ' + result.error;
+      statsEl.style.color = '#ff6b6b';
+      _renderStrokeCanvas(canvas, w, h, []);
+      ildBtn.disabled = true; jsonBtn.disabled = true;
+      return;
+    }
+    const polys = result.polylines || [];
+    const np = result.n_paths != null ? result.n_paths : polys.length;
+    const npts = result.n_points != null ? result.n_points : polys.reduce((s, p) => s + p.points.length, 0);
+    statsEl.style.color = '';
+    statsEl.textContent = `${np} paths · ${npts} pts · ${result.elapsed_ms} ms`;
+    _renderStrokeCanvas(canvas, w, h, polys);
+    strokeState[method] = { polylines: polys, w, h };
+    ildBtn.disabled = polys.length === 0;
+    jsonBtn.disabled = polys.length === 0;
+  }
+
+  async function downloadStrokeIld(method) {
+    const s = strokeState[method];
+    if (!s) return;
+    const btn = document.getElementById(`stroke-${method}-ild`);
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = 'building...';
+    try {
+      const res = await fetch(`${API_BASE}/api/laser/ild-export`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          width: s.w, height: s.h, polylines: s.polylines, invert_y: true,
+          filename: `stroke_${method}_${Date.now()}.ild`,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = `stroke_${method}_${Date.now()}.ild`; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      alert(`stroke-${method} ild failed: ` + e.message);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = orig;
+    }
+  }
+  function downloadStrokeJson(method) {
+    const s = strokeState[method];
+    if (!s) return;
+    const blob = new Blob([JSON.stringify({width: s.w, height: s.h, polylines: s.polylines}, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `stroke_${method}_${Date.now()}.json`; a.click();
+    URL.revokeObjectURL(url);
+  }
+  for (const m of ['skeleton', 'percolor', 'potrace', 'neon']) {
+    document.getElementById(`stroke-${m}-ild`).onclick  = () => downloadStrokeIld(m);
+    document.getElementById(`stroke-${m}-json`).onclick = () => downloadStrokeJson(m);
+    Object.defineProperty(strokeState, m, { configurable: true, enumerable: true, writable: true, value: undefined });
+  }
+
+  // ---- Video stroke pipeline ----
+  // After processing a video, the skeleton panel becomes animated: each
+  // frame's cached polylines are fetched and rendered in sync with playback.
+  const strokeVideoBar      = document.getElementById('stroke-video-progress');
+  const strokeVideoBarInner = strokeVideoBar.firstElementChild;
+  const strokeVideoState = {
+    cacheId: null,
+    fps: 24,
+    nFrames: 0,
+    procW: 0, procH: 0,
+    method: 'skeleton',
+    frameCache: new Map(),     // frameIdx → polylines | null (loading)
+    lastRenderedIdx: -1,
+  };
+
+  function _strokeVideoFrameUrl(idx) {
+    const fn = String(idx).padStart(6, '0') + '.json';
+    return `${API_BASE}/stroke_video_cache/${strokeVideoState.cacheId}/frames/${fn}`;
+  }
+
+  function _fetchStrokeVideoFrame(idx) {
+    if (strokeVideoState.frameCache.has(idx)) {
+      return strokeVideoState.frameCache.get(idx);
+    }
+    const entry = { polylines: null, loading: true };
+    strokeVideoState.frameCache.set(idx, entry);
+    fetch(_strokeVideoFrameUrl(idx))
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (j && Array.isArray(j.polylines)) entry.polylines = j.polylines;
+        entry.loading = false;
+      })
+      .catch(() => { entry.loading = false; });
+    return entry;
+  }
+
+  function _findNearestFrame(targetIdx, stride) {
+    // Cache only contains frames where (i % stride === 0). Round to nearest.
+    const k = Math.round(targetIdx / stride) * stride;
+    return Math.max(0, Math.min(strokeVideoState.nFrames - 1, k));
+  }
+
+  // Hook: called every frame from the main animation loop (only when a stroke
+  // video cache is loaded). Updates the skeleton panel with the current frame's
+  // polylines.
+  function _renderStrokeVideoFrame() {
+    if (!strokeVideoState.cacheId) return;
+    const stride = strokeVideoState.stride || 1;
+    const t = video.currentTime || 0;
+    const target = Math.floor(t * strokeVideoState.fps);
+    const idx = _findNearestFrame(target, stride);
+    // prefetch ±2 stride steps
+    for (let d = -1; d <= 4; d++) {
+      _fetchStrokeVideoFrame(_findNearestFrame(target + d * stride, stride));
+    }
+    const entry = strokeVideoState.frameCache.get(idx);
+    if (!entry || entry.polylines == null) {
+      // missing — keep last drawn
+      return;
+    }
+    if (idx === strokeVideoState.lastRenderedIdx) return;
+    strokeVideoState.lastRenderedIdx = idx;
+    _renderStrokeCanvas('cv-stroke-skeleton', strokeVideoState.procW, strokeVideoState.procH, entry.polylines);
+    strokeState['skeleton'] = {
+      polylines: entry.polylines,
+      w: strokeVideoState.procW,
+      h: strokeVideoState.procH,
+    };
+    document.getElementById('stroke-skeleton-stats').textContent =
+      `frame ${idx} · ${entry.polylines.length} paths`;
+    document.getElementById('stroke-skeleton-ild').disabled = entry.polylines.length === 0;
+    document.getElementById('stroke-skeleton-json').disabled = entry.polylines.length === 0;
+  }
+
+  async function _pollStrokeVideoJob(cacheId) {
+    while (true) {
+      await new Promise(r => setTimeout(r, 1500));
+      const res = await fetch(`${API_BASE}/api/stroke/video-jobs/${cacheId}`);
+      if (!res.ok) throw new Error('job lookup failed');
+      const m = await res.json();
+      const pct = (m.progress || 0) * 100;
+      strokeVideoBarInner.style.width = pct.toFixed(1) + '%';
+      strokeStatus.textContent = `${m.status} · ${m.processed_frames || 0} frames · ${pct.toFixed(0)}%`;
+      if (m.status === 'done') {
+        strokeVideoState.cacheId = cacheId;
+        strokeVideoState.fps = m.fps || 24;
+        strokeVideoState.nFrames = m.n_frames || 0;
+        strokeVideoState.procW = m.proc_width || m.src_width || 480;
+        strokeVideoState.procH = m.proc_height || m.src_height || 360;
+        strokeVideoState.method = m.method || 'skeleton';
+        strokeVideoState.stride = m.stride || 1;
+        strokeVideoState.frameCache.clear();
+        strokeVideoState.lastRenderedIdx = -1;
+        return m;
+      }
+      if (m.status === 'error') {
+        throw new Error(m.error || 'job failed');
+      }
+    }
+  }
+
+  // Per-card "process this image" — runs only the chosen method against the backend.
+  async function processStrokeMethod(apiMethod, btn) {
+    const path = samPath.value.trim();
+    if (!path) return alert('upload an image first (use "choose file…").');
+    if (samState.mediaType && samState.mediaType !== 'image') {
+      if (!confirm('Stroke art works on still images. Continue with this video file?')) return;
+    }
+    if (btn) btn.disabled = true;
+    strokeStatus.textContent = `processing ${apiMethod}…`;
+    strokeStatus.style.color = 'var(--accent)';
+    try {
+      const params = _strokeParamsFor(apiMethod);
+      const res = await fetch(`${API_BASE}/api/stroke/process`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path, methods: [apiMethod], ...params }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const w = data.width, h = data.height;
+      const uiKey = apiMethod === 'per_color' ? 'percolor' : apiMethod;
+      _strokeMethodResult(uiKey, data.methods[apiMethod], w, h);
+      strokeStatus.textContent = `${apiMethod}: done`;
+    } catch (e) {
+      strokeStatus.textContent = `${apiMethod}: error: ${e.message}`;
+      strokeStatus.style.color = '#ff6b6b';
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  document.querySelectorAll('[data-stroke-process]').forEach(b => {
+    b.addEventListener('click', () => processStrokeMethod(b.dataset.strokeProcess, b));
+  });
+
+  // Per-card "process video" buttons (skeleton + neon trigger the offline backend pipeline).
+  async function processStrokeVideo(method, btn) {
+    const path = samPath.value.trim();
+    if (!path) return alert('upload a video first via "choose file…".');
+    if (btn) btn.disabled = true;
+    strokeVideoBar.style.display = '';
+    strokeVideoBarInner.style.width = '0%';
+    strokeStatus.textContent = `${method} video: queuing…`;
+    strokeStatus.style.color = 'var(--accent)';
+    try {
+      // Pull params from the matching card.
+      const cardThr = method === 'skeleton'
+        ? parseInt(skel.thr.value)
+        : 90;
+      const cardMorph = method === 'skeleton' ? parseInt(skel.morph.value) : 3;
+      const cardMinLen = method === 'skeleton'
+        ? parseInt(skel.minlen.value)
+        : parseInt(neonS.minlen.value);
+      const cardPrune = method === 'skeleton'
+        ? parseInt(skel.prune.value)
+        : parseInt(neonS.prune.value);
+      const cardEps = method === 'skeleton'
+        ? parseInt(skel.eps.value) / 10
+        : parseInt(neonS.eps.value) / 10;
+
+      const res = await fetch(`${API_BASE}/api/stroke/process-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path, method,
+          stride: 2, target_width: 480,
+          brightness_threshold: cardThr, morph_close: cardMorph,
+          min_length: cardMinLen, prune_branches: cardPrune, simplify_eps: cardEps,
+          sam_cache_id: (samState.enabled && samState.cacheId) ? samState.cacheId : null,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const { cache_id, manifest, status } = await res.json();
+      if (status === 'done' && manifest) {
+        strokeVideoState.cacheId = cache_id;
+        strokeVideoState.fps = manifest.fps || 24;
+        strokeVideoState.nFrames = manifest.n_frames || 0;
+        strokeVideoState.procW = manifest.proc_width || 480;
+        strokeVideoState.procH = manifest.proc_height || 360;
+        strokeVideoState.method = manifest.method || method;
+        strokeVideoState.stride = manifest.stride || 1;
+        strokeVideoState.frameCache.clear();
+        strokeVideoState.lastRenderedIdx = -1;
+        strokeVideoBarInner.style.width = '100%';
+        strokeStatus.textContent = `${method} video: cached · animating`;
+      } else {
+        await _pollStrokeVideoJob(cache_id);
+        strokeStatus.textContent = `${method} video: done · animating`;
+      }
+    } catch (e) {
+      strokeStatus.style.color = '#ff6b6b';
+      strokeStatus.textContent = `${method} video: error: ${e.message}`;
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+  document.querySelectorAll('[data-stroke-process-video]').forEach(b => {
+    b.addEventListener('click', () => processStrokeVideo(b.dataset.strokeProcessVideo, b));
+  });
+
+  // ---------- load OpenCV.js ----------
+  window.Module = {
+    onRuntimeInitialized() {
+      cv = window.cv;
+      onCvReady();
+    }
+  };
+  const script = document.createElement('script');
+  script.async = true;
+  script.src = 'https://docs.opencv.org/4.x/opencv.js';
+  script.onerror = () => {
+    statusEl.textContent = 'failed to load opencv.js — are you online?';
+  };
+  document.body.appendChild(script);
+
+  video.addEventListener('error', () => {
+    statusEl.textContent = 'video failed to load — use file picker (.mov may not play in this browser)';
+  });
+</script>
+</body>
+</html>

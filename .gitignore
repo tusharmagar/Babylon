@@ -116,3 +116,13 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Babylon: SAM 3 + stroke art runtime caches (regenerated on demand)
+backend/sam3_cache/
+backend/sam3_uploads/
+backend/stroke_video_cache/
+backend/ilda_exports/
+
+# SQLite transient files
+*.db-shm
+*.db-wal
